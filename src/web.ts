@@ -687,7 +687,7 @@ export async function homePage(env: Env, player: Player, meToken: string, now: D
     <div class="date"><span>${prettyDay(today)}</span><span>Week of ${prettyDay(start).slice(4)}</span></div>
     <div class="faces">${face(week.points, todayPts)}${weekFace(week, today)}</div>
     <div class="players" style="margin-top:10px">${playerCard(env, player, s, today, todayPts)}</div>
-    <p class="rules">1 point each for calories, protein, ${prettyDuration(r.sleepTargetMinutes)}+ sleep, and being up by ${prettyClock(r.wakeWeekday)} (weekends ${prettyClock(r.wakeWeekend)}, ${r.wakeGraceMinutes} min grace). Calories get ${r.calorieGrace} cal of grace and protein ${r.proteinGrace}g.</p>
+    <p class="rules">1 point each for calories, protein, ${prettyDuration(r.sleepTargetMinutes).replace(" 00m", "")}+ sleep, and being up by ${prettyClock(r.wakeWeekday)} (weekends ${prettyClock(r.wakeWeekend)}, ${r.wakeGraceMinutes} min grace). Calories get ${r.calorieGrace} cal of grace and protein ${r.proteinGrace}g.</p>
     ${await gymPanel(env, player, meToken, today)}
     <h2>Today's food</h2><div class="card">${list(todayMeals, "Nothing logged yet today. Text Poke what you ate.")}</div>
     <h2>Yesterday</h2><div class="card">${list(yMeals, "Nothing logged yesterday.")}</div>
