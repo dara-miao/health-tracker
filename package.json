@@ -1,0 +1,28 @@
+{
+  "name": "health-tracker",
+  "version": "1.0.0",
+  "description": "Personal food, sleep, and gym tracker you text through Poke over MCP",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "typecheck": "tsc",
+    "db:migrate": "wrangler d1 migrations apply health-bet --remote"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dara-miao/health-tracker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dara-miao/health-tracker/issues"
+  },
+  "homepage": "https://github.com/dara-miao/health-tracker#readme",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260930.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3",
+    "wrangler": "^4.145.0"
+  },
+  "private": true,
+  "type": "module"
+}

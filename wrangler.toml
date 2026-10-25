@@ -1,0 +1,36 @@
+name = "bet"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+# Don't wipe variables added in the Cloudflare dashboard (like JOIN_CODE) on each deploy.
+keep_vars = true
+
+[vars]
+# The one player this app is for: the name you set up with. Every other player row is ignored.
+OWNER_NAME = "Dara"
+# One clock for everything. Days roll over at 4am so late-night snacks count for the day before.
+GAME_TZ = "America/Los_Angeles"
+SLEEP_TARGET_HOURS = "7"
+# Wake-up point: up by this time (Sat/Sun use the weekend time), plus a grace period.
+WAKE_WEEKDAY = "08:30"
+WAKE_WEEKEND = "10:30"
+WAKE_GRACE_MINUTES = "10"
+# School breaks: these weekdays use the weekend wake-up time. Comma-separated dates or from..to ranges.
+BREAK_DAYS = "2026-10-08..2026-10-09"
+# A cut day under this many calories never earns the calorie point.
+CUT_FLOOR_CALORIES = "1200"
+# Food estimates aren't exact: calories this far past the target and protein this far short still count.
+CALORIE_GRACE = "50"
+PROTEIN_GRACE_G = "5"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "health-bet"
+database_id = "47feba78-2d5b-4816-a28a-590f42189573"
+migrations_dir = "migrations"
+
+[triggers]
+# Hourly; the worker decides what to send based on the local hour in GAME_TZ.
+crons = ["0 * * * *"]
+
+# Secret (set with `npx wrangler secret put JOIN_CODE`):
+#   JOIN_CODE: the password for the site and the setup page
