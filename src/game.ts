@@ -1,8 +1,8 @@
 import * as db from "./db";
 import type { Env, MealWithItems, Player } from "./db";
-import { EMPTY_DAY, calorieGoalMet, proteinGoalMet, scoreDay, sleepGoalMet, wakeMinutes, wakeTarget, type DayStats } from "./scoring";
+import { EMPTY_DAY, GOAL_KEYS, calorieGoalMet, dayStatus, proteinGoalMet, scoreDay, sleepGoalMet, wakeMinutes, wakeTarget, type DayStats, type DayStatus } from "./scoring";
 import { countByDay, weekCount, weekStreak, type Workout } from "./gym";
-import { addDays, gameDay, localParts, prettyClock, prettyDay, prettyDuration, prettyTime, weekDays, weekStart } from "./time";
+import { addDays, gameDay, localParts, prettyClock, prettyDay, prettyDuration, prettyTime, weekDays, weekdayOf, weekStart } from "./time";
 
 const MAX_SLEEP_MINUTES = 16 * 60;
 
@@ -42,7 +42,7 @@ export async function logNight(env: Env, player: Player, bed: Date, wake: Date):
   const r = db.rules(env);
   const target = r.sleepTargetMinutes;
   const verdict =
-    minutes >= target ? "Sleep point earned ✅" : `${prettyDuration(target - minutes)} short of the ${prettyDuration(target)} target ❌`;
+    minutes >= target ? "Sleep goal hit ✅" : `${prettyDuration(target - minutes)} short of the ${prettyDuration(target)} target ❌`;
   return `Logged ${prettyDuration(minutes)} of sleep (${prettyTime(bed.toISOString(), env.GAME_TZ)} to ${prettyTime(wake.toISOString(), env.GAME_TZ)}) for ${prettyDay(day)}. ${verdict} ${wakeLine(env, day, wake.toISOString())}`;
 }
 
@@ -123,40 +123,177 @@ export async function dayStats(env: Env, playerId: number, day: string): Promise
   return (await db.statsForRange(env.DB, playerId, day, day)).get(day) ?? { ...EMPTY_DAY };
 }
 
-export interface Week {
+export type GoalKey = (typeof GOAL_KEYS)[number];
+export const GOAL_NAMES: Record<GoalKey, string> = { cal: "Calories", protein: "Protein", sleep: "Sleep", wake: "Up on time" };
+
+export interface WeekGoals {
   start: string;
   days: string[];
-  perDay: (number | null)[]; // null for days in the future or before tracking started
-  points: number;
-  sleepMinutes: number;
+  status: (DayStatus | null)[]; // null for days in the future or before tracking started
+  /** Days each goal was hit, out of the days it can be judged (logged and finished, or already hit today). */
+  counts: Record<GoalKey, { hit: number; of: number }>;
 }
 
-/** The first day that counts for points (settings "start_day"), or null to count everything. */
+/** The first day that counts (settings "start_day"), or null to count everything. */
 export async function trackingStart(env: Env): Promise<string | null> {
   return db.getSetting(env.DB, "start_day");
 }
 
-/** Scores a Monday-to-Sunday week, counting days up to and including `through`. Out of 28. */
-export async function weekPoints(env: Env, player: Player, start: string, through: string): Promise<Week> {
+/** Each goal's status for every day of a Monday-to-Sunday week, up to and including `today`. */
+export async function weekGoals(env: Env, player: Player, start: string, today: string): Promise<WeekGoals> {
   const from = (await trackingStart(env)) ?? "";
   const days = weekDays(start);
   const r = db.rules(env);
   const stats = await db.statsForRange(env.DB, player.id, start, days[6]);
-  let points = 0;
-  let sleepMinutes = 0;
-  const perDay = days.map((day) => {
-    if (day > through || day < from) return null;
-    const s = stats.get(day) ?? EMPTY_DAY;
-    const score = scoreDay(player, s, r, day).points;
-    points += score;
-    sleepMinutes += s.sleepMinutes ?? 0;
-    return score;
-  });
-  return { start, days, perDay, points, sleepMinutes };
+  const status = days.map((day) => (day > today || day < from ? null : dayStatus(player, stats.get(day) ?? EMPTY_DAY, r, day, today)));
+  const counts = Object.fromEntries(GOAL_KEYS.map((k) => [k, { hit: 0, of: 0 }])) as WeekGoals["counts"];
+  for (const st of status) {
+    if (!st) continue;
+    for (const k of GOAL_KEYS) {
+      if (st[k] === "none" || st[k] === "now") continue;
+      counts[k].of++;
+      if (st[k] === "hit") counts[k].hit++;
+    }
+  }
+  return { start, days, status, counts };
 }
 
-export function weekLine(w: Week): string {
-  return `${w.points} pts (${w.perDay.map((p) => (p == null ? "·" : p)).join(" ")}), ${prettyDuration(w.sleepMinutes)} sleep`;
+export function weekLine(w: WeekGoals): string {
+  return GOAL_KEYS.map((k) => `${GOAL_NAMES[k]} ${w.counts[k].of ? `${w.counts[k].hit}/${w.counts[k].of}` : "–"}`).join(" · ");
+}
+
+/** Days in a row each goal was hit, counting back from today (today only counts once it's hit). */
+export async function goalStreaks(env: Env, player: Player, today: string): Promise<Record<GoalKey, number>> {
+  const from = (await trackingStart(env)) ?? "";
+  const r = db.rules(env);
+  const stats = await db.statsForRange(env.DB, player.id, addDays(today, -90), today);
+  const out = {} as Record<GoalKey, number>;
+  for (const k of GOAL_KEYS) {
+    let n = 0;
+    for (let d = today; d >= from && d >= addDays(today, -90); d = addDays(d, -1)) {
+      const st = dayStatus(player, stats.get(d) ?? EMPTY_DAY, r, d, today)[k];
+      if (d === today && st !== "hit") continue;
+      if (st !== "hit") break;
+      n++;
+    }
+    out[k] = n;
+  }
+  return out;
+}
+
+export interface Averages {
+  sleepMinutes: number | null;
+  wakeMinutes: number | null;
+  calories: number | null;
+  protein: number | null;
+}
+
+/** Averages over the seven finished days before today, from the days that have each thing logged. */
+export async function lastWeekAverages(env: Env, player: Player, today: string): Promise<Averages> {
+  const stats = [...(await db.statsForRange(env.DB, player.id, addDays(today, -7), addDays(today, -1))).values()];
+  const avg = (xs: number[]) => (xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null);
+  const fed = stats.filter((s) => s.foodCount > 0 && !s.unitemized);
+  return {
+    sleepMinutes: avg(stats.flatMap((s) => (s.sleepMinutes == null ? [] : [s.sleepMinutes]))),
+    wakeMinutes: avg(stats.flatMap((s) => (s.wakeAt == null ? [] : [wakeMinutes(s.wakeAt, env.GAME_TZ)]))),
+    calories: avg(fed.map((s) => s.calories)),
+    protein: avg(fed.map((s) => s.protein)),
+  };
+}
+
+// ---------- sentences (the journal-style lines on the page) ----------
+
+const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+const FULL_DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
+const clockOf = (iso: string, tz: string) => prettyTime(iso, tz).replace(/ (AM|PM)$/, "");
+const listOf = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
+
+function gap(minutes: number): string {
+  if (minutes === 60) return "an hour";
+  if (minutes < 60) return `${minutes} minutes`;
+  return minutes % 60 === 0 ? `${NUMBER_WORDS[minutes / 60] ?? minutes / 60} hours` : prettyDuration(minutes);
+}
+
+/** "You slept nine hours, 12:30 to 9:30, and were up an hour before the deadline. 460 calories left and 34 g of protein to go." */
+export function todaySentence(env: Env, p: Player, s: DayStats, day: string): string {
+  const r = db.rules(env);
+  const out: string[] = [];
+  let wake = "";
+  if (s.wakeAt) {
+    const late = wakeMinutes(s.wakeAt, r.tz) - wakeTarget(day, r);
+    wake =
+      late <= -15 ? `were up ${gap(-late)} before the deadline`
+      : late <= 0 ? "were up right on time"
+      : late <= r.wakeGraceMinutes ? "were up just in time"
+      : `were up ${gap(late)} late`;
+  }
+  if (s.sleepMinutes != null) {
+    const dur = s.sleepMinutes % 60 === 0 ? `${NUMBER_WORDS[s.sleepMinutes / 60] ?? s.sleepMinutes / 60} hours` : prettyDuration(s.sleepMinutes);
+    const span = s.bedAt && s.wakeAt ? `, ${clockOf(s.bedAt, r.tz)} to ${clockOf(s.wakeAt, r.tz)}` : "";
+    out.push(`You slept ${dur}${span}${wake ? `, and ${wake}` : ""}.`);
+  } else if (s.wakeAt) {
+    out.push(`You ${wake}, at ${clockOf(s.wakeAt, r.tz)}. No sleep logged.`);
+  } else {
+    out.push("No sleep logged yet.");
+  }
+  if (s.foodCount === 0) {
+    out.push("Nothing eaten logged yet.");
+  } else if (p.calorie_target != null && p.protein_target != null && p.goal_type) {
+    const left = p.calorie_target - s.calories;
+    const cal =
+      p.goal_type === "cut" ? (left >= 0 ? `${fmt(left)} calories left` : `${fmt(-left)} calories over the limit`)
+      : left > 0 ? `${fmt(left)} calories to go` : "calories done";
+    const pLeft = p.protein_target - s.protein;
+    const pro = pLeft > 0 ? `${pLeft} g of protein to go` : "protein done";
+    out.push(`${cal[0].toUpperCase()}${cal.slice(1)} and ${pro}.`);
+  } else {
+    out.push(`${fmt(s.calories)} calories and ${s.protein} g of protein so far.`);
+  }
+  return out.join(" ");
+}
+
+/** A few lines on the week: streaks worth noticing, and why a blank day isn't a miss. */
+export function weekNotes(w: WeekGoals, streaks: Record<GoalKey, number>, today: string): string {
+  const out: string[] = [];
+  const runs = [
+    streaks.sleep >= 2 && `sleep has been on target ${streaks.sleep} nights running`,
+    streaks.wake >= 2 && `you've been up on time ${streaks.wake} days in a row`,
+    streaks.protein >= 2 && `protein's been hit ${streaks.protein} days running`,
+    streaks.cal >= 2 && `calories have been on target ${streaks.cal} days running`,
+  ].filter((x): x is string => Boolean(x)).slice(0, 2);
+  if (runs.length) {
+    const line = runs.join(", and ");
+    out.push(`${line[0].toUpperCase()}${line.slice(1)}.`);
+  }
+  const blank = w.days.filter((d, i) => d < today && w.status[i]?.cal === "none").map((d) => FULL_DAYS[weekdayOf(d)]);
+  if (blank.length) {
+    out.push(`${listOf(blank)} ${blank.length > 1 ? "have" : "has"} no food logged, so ${blank.length > 1 ? "they're" : "it's"} left blank rather than counted against you.`);
+  }
+  return out.join(" ");
+}
+
+/** "Gym on Monday and Thursday, a run on Saturday. That's your goal two weeks in a row." */
+export function gymSentence(p: Player, g: GymSummary, weekStartDay: string): string {
+  const week = g.workouts.filter((w) => w.day >= weekStartDay && w.day <= addDays(weekStartDay, 6));
+  if (!week.length) return p.workout_target ? `No workouts yet this week. Your goal is ${p.workout_target}.` : "No workouts yet this week.";
+  const byKind = new Map<string, string[]>();
+  for (const w of week) {
+    const label = w.kind === "gym" ? "the gym" : w.kind === "run" ? "a run" : w.note ? w.note : "sport";
+    const day = FULL_DAYS[weekdayOf(w.day)];
+    const list = byKind.get(label) ?? [];
+    if (!list.includes(day)) list.push(day);
+    byKind.set(label, list);
+  }
+  const what = [...byKind].map(([label, days]) => `${label} on ${listOf(days)}`).join(", ");
+  let goal = "";
+  if (p.workout_target) {
+    goal =
+      g.thisWeek < p.workout_target ? ` ${p.workout_target - g.thisWeek} more for your goal of ${p.workout_target}.`
+      : g.streak >= 2 ? ` That's your goal ${NUMBER_WORDS[g.streak] ?? g.streak} weeks in a row.`
+      : " That's your goal for the week.";
+  }
+  return `${what[0].toUpperCase()}${what.slice(1)}.${goal}`;
 }
 
 /** Everything the agent needs to answer questions and pick the right ids. */
@@ -170,7 +307,7 @@ export async function statusReport(env: Env, player: Player, now: Date, offset: 
   const [meals, yesterdayMeals, week, weights, stats, gym] = await Promise.all([
     db.mealsForDay(env.DB, player.id, today),
     db.mealsForDay(env.DB, player.id, addDays(today, -1)),
-    weekPoints(env, player, weekStart(today), today),
+    weekGoals(env, player, weekStart(today), today),
     db.weightsForPlayer(env.DB, player.id),
     dayStats(env, player.id, today),
     gymSummary(env, player, today),
@@ -201,7 +338,7 @@ export async function statusReport(env: Env, player: Player, now: Date, offset: 
     `Yesterday's meals (${addDays(today, -1)}):`,
     ...mealLines(yesterdayMeals),
     "",
-    `This week (Mon to today, out of 28): ${weekLine(week)}`,
+    `This week (Mon to today, days each goal was hit out of days it can be judged): ${weekLine(week)}`,
     `${player.name}'s page (don't share the link): ${pageUrl}`,
   ];
   return lines.filter((l, i) => l !== "" || lines[i - 1] !== "").join("\n");
@@ -252,30 +389,21 @@ export async function totalsLine(env: Env, player: Player, day: string): Promise
 
 export async function dayRecap(env: Env, player: Player, day: string): Promise<string> {
   const s = await dayStats(env, player.id, day);
-  return [
-    `📋 ${prettyDay(day)}: ${scoreDay(player, s, db.rules(env), day).points}/4`,
-    ...statusLines(env, player, s, day, { final: true }),
-  ].join("\n");
+  const sc = scoreDay(player, s, db.rules(env), day);
+  const hit = [sc.calOk, sc.proteinOk, sc.sleepOk, sc.wakeOk].filter(Boolean).length;
+  return [`📋 ${prettyDay(day)}: ${hit} of 4 goals`, ...statusLines(env, player, s, day, { final: true })].join("\n");
 }
 
-/** Monday morning: last week's total, how it compares with the week before, and the gym streak. */
+/** Monday morning: how often each goal was hit last week, and workouts. */
 export async function weekSummary(env: Env, player: Player, start: string): Promise<string> {
-  const [week, before, gym] = await Promise.all([
-    weekPoints(env, player, start, addDays(start, 6)),
-    weekPoints(env, player, addDays(start, -7), addDays(start, -1)),
-    gymSummary(env, player, addDays(start, 6)),
-  ]);
-  const counted = before.perDay.some((p) => p != null);
-  const diff = week.points - before.points;
-  const trend = !counted ? "" : diff > 0 ? ` Up ${diff} from the week before.` : diff < 0 ? ` Down ${-diff} from the week before.` : " Same as the week before.";
-  const perfect = week.perDay.filter((p) => p === 4).length;
-  const target = player.workout_target ? ` of ${player.workout_target}` : "";
-  const streak = player.workout_target && gym.streak ? `, ${gym.streak}-week streak` : "";
+  const end = addDays(start, 6);
+  const [week, gym] = await Promise.all([weekGoals(env, player, start, end), gymSummary(env, player, end)]);
+  const notes = weekNotes(week, await goalStreaks(env, player, end), addDays(end, 1));
   return [
-    `🏁 Week of ${prettyDay(start)}: ${week.points}/28.${trend}`,
+    `🏁 Week of ${prettyDay(start)}`,
     weekLine(week),
-    perfect ? `${perfect} perfect day${perfect === 1 ? "" : "s"}.` : "",
-    `🏋️ ${gym.thisWeek}${target} workouts${streak}.`,
+    notes,
+    `🏋️ ${gymSentence(player, gym, start)}`,
   ].filter(Boolean).join("\n");
 }
 
@@ -300,7 +428,7 @@ export async function eveningNudge(env: Env, player: Player, day: string): Promi
   const r = db.rules(env);
   const tomorrow = addDays(day, 1);
   lines.push(
-    `Tomorrow (${prettyDay(tomorrow)}): up by ${prettyClock(wakeTarget(tomorrow, r))} for the wake-up point. Text gm when you get up.`,
+    `Tomorrow (${prettyDay(tomorrow)}): up by ${prettyClock(wakeTarget(tomorrow, r))} for the wake-up goal. Text gm when you get up.`,
   );
   return lines.join("\n");
 }

@@ -253,7 +253,7 @@ export async function statsForRange(
          FROM food_entries WHERE player_id = ? AND day BETWEEN ? AND ? GROUP BY day`,
       )
       .bind(playerId, from, to),
-    db.prepare("SELECT day, minutes, wake_at FROM sleep_entries WHERE player_id = ? AND day BETWEEN ? AND ?").bind(playerId, from, to),
+    db.prepare("SELECT day, minutes, wake_at, bed_at FROM sleep_entries WHERE player_id = ? AND day BETWEEN ? AND ?").bind(playerId, from, to),
   ]);
   const out = new Map<string, DayStats>();
   const get = (day: string) => {
@@ -263,7 +263,7 @@ export async function statsForRange(
   for (const r of food.results) {
     Object.assign(get(r.day), { calories: r.calories, protein: r.protein, fat: r.fat, carbs: r.carbs, sugar: r.sugar, addedSugar: r.added_sugar, unitemized: r.unitemized, foodCount: r.n });
   }
-  for (const r of sleep.results) Object.assign(get(r.day), { sleepMinutes: r.minutes, wakeAt: r.wake_at });
+  for (const r of sleep.results) Object.assign(get(r.day), { sleepMinutes: r.minutes, wakeAt: r.wake_at, bedAt: r.bed_at });
   return out;
 }
 

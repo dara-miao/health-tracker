@@ -1,14 +1,14 @@
 // Pure scoring rules, kept separate so they're easy to read and test.
 //
-// Each day you can earn up to 4 points:
-//   +1 calories: cut  -> at or under calorie_target (but not under the cut floor)
+// Four daily goals:
+//   calories: cut  -> at or under calorie_target (but not under the cut floor)
 //                bulk -> at or over calorie_target
-//   +1 protein:  at or over protein_target
-//   +1 sleep:    slept at least the sleep target that night
-//   +1 wake-up:  woke up by the day's wake time (weekday or weekend) plus the grace period
-// Food points need at least one logged entry that day, so not logging isn't a free "cut" win,
+//   protein:  at or over protein_target
+//   sleep:    slept at least the sleep target that night
+//   wake-up:  woke up by the day's wake time (weekday or weekend) plus the grace period
+// Food goals need at least one logged entry that day, so not logging isn't a free "cut" win,
 // and none of the day's entries can be a bare total ("I hit 3000 today") with no foods behind it.
-// Fat and carbs are tracked and shown but don't score. A week is out of 28.
+// Fat and carbs are tracked and shown but aren't goals.
 
 import { localParts, weekdayOf } from "./time";
 
@@ -43,6 +43,7 @@ export interface DayStats {
   unitemized?: number; // entries that are a calorie number with no actual foods
   sleepMinutes: number | null;
   wakeAt: string | null; // ISO time they got up (the night's sleep ends on this day)
+  bedAt?: string | null;
 }
 
 export const EMPTY_DAY: DayStats = { calories: 0, protein: 0, fat: 0, carbs: 0, foodCount: 0, sleepMinutes: null, wakeAt: null };
@@ -103,4 +104,51 @@ export function scoreDay(goal: Goal, stats: DayStats, rules: Rules, day: string)
   const sleepOk = sleepGoalMet(stats, rules);
   const wakeOk = wakeGoalMet(day, stats, rules);
   return { calOk, proteinOk, sleepOk, wakeOk, points: +calOk + +proteinOk + +sleepOk + +wakeOk };
+}
+
+// ---------- goal status (what the pages show instead of points) ----------
+
+/** hit, close (within NEAR of the goal), missed, nothing logged, or still in progress today. */
+export type GoalStatus = "hit" | "near" | "miss" | "none" | "now";
+
+export interface DayStatus {
+  cal: GoalStatus;
+  protein: GoalStatus;
+  sleep: GoalStatus;
+  wake: GoalStatus;
+}
+
+export const GOAL_KEYS = ["cal", "protein", "sleep", "wake"] as const;
+
+/** How close counts as "close": 10% on food, 30 minutes on sleep and wake-up. */
+export const NEAR = { food: 0.1, minutes: 30 };
+
+export function dayStatus(goal: Goal, s: DayStats, rules: Rules, day: string, today: string): DayStatus {
+  const live = day === today;
+  const sc = scoreDay(goal, s, rules, day);
+  let cal: GoalStatus = "none";
+  if (s.foodCount > 0 && goal.calorie_target != null && goal.goal_type) {
+    const t = goal.calorie_target;
+    const grace = rules.calorieGrace ?? 0;
+    if (sc.calOk) cal = live && goal.goal_type === "cut" ? "now" : "hit";
+    else if (s.unitemized) cal = "miss";
+    else if (goal.goal_type === "cut") {
+      if (s.calories > t + grace) cal = s.calories <= t * (1 + NEAR.food) ? "near" : "miss";
+      else cal = live ? "now" : "miss"; // under the floor
+    } else cal = live ? "now" : s.calories >= t * (1 - NEAR.food) ? "near" : "miss";
+  }
+  let protein: GoalStatus = "none";
+  if (s.foodCount > 0 && goal.protein_target != null) {
+    if (sc.proteinOk) protein = "hit";
+    else if (s.unitemized) protein = "miss";
+    else protein = live ? "now" : s.protein >= goal.protein_target * (1 - NEAR.food) ? "near" : "miss";
+  }
+  const sleep: GoalStatus =
+    s.sleepMinutes == null ? "none" : sc.sleepOk ? "hit" : s.sleepMinutes >= rules.sleepTargetMinutes - NEAR.minutes ? "near" : "miss";
+  let wake: GoalStatus = "none";
+  if (s.wakeAt != null) {
+    const late = wakeMinutes(s.wakeAt, rules.tz) - wakeTarget(day, rules) - rules.wakeGraceMinutes;
+    wake = sc.wakeOk ? "hit" : late <= NEAR.minutes ? "near" : "miss";
+  }
+  return { cal, protein, sleep, wake };
 }

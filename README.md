@@ -1,6 +1,6 @@
-# Health Tracker
+# Health
 
-**A personal food, sleep, and gym tracker you use by texting.** You text your AI agent what you ate, when you went to bed, and when you woke up. It estimates calories and macros, logs everything to this app over the [Model Context Protocol](https://modelcontextprotocol.io), and scores the day out of 4.
+**A personal food, sleep, and gym tracker you use by texting.** You text your AI agent what you ate, when you went to bed, and when you woke up. It estimates calories and macros, logs everything to this app over the [Model Context Protocol](https://modelcontextprotocol.io), and shows which of your four daily goals you hit.
 
 No calorie-counting app, no forms, no barcode scanning. Just texts like these:
 
@@ -9,7 +9,7 @@ No calorie-counting app, no forms, no barcode scanning. Just texts like these:
 > **me:** gn
 > **Poke:** Bedtime logged at 12:40am.
 > **me:** up
-> **Poke:** 7h 25m. Sleep point ✓ and up by 8:30 ✓.
+> **Poke:** 7h 25m. Sleep goal ✓ and up by 8:30 ✓.
 
 ---
 
@@ -40,9 +40,9 @@ flowchart LR
 3. **The server enforces the rules, not the model.** Scoring, day boundaries, and deadlines all live in deterministic TypeScript. The agent gets back plain-text results with running totals, so it can't drift from what's stored.
 4. **It talks back.** An hourly cron sends a 10am recap, a 9pm "here's what's left" check-in, and a Monday week summary through Poke's inbound API, so they arrive as normal iMessages.
 
-## The rules
+## The goals
 
-Each day earns up to **4 points**, so a week is out of 28:
+Four goals a day. There are no points: each goal is **hit**, **close** (within 10% on food, 30 minutes on sleep and wake-up), **missed**, or **nothing logged**, which is left blank instead of counting against you.
 
 | | Cut | Bulk |
 |---|---|---|
@@ -51,15 +51,16 @@ Each day earns up to **4 points**, so a week is out of 28:
 | 😴 Sleep | 7h or more | 7h or more |
 | ⏰ Wake-up | up by 8:30 weekdays, 10:30 weekends (10 min grace) | same |
 
+- The Today page leads with your day in a sentence, then four rings that fill toward each goal, the week as a grid of squares, per-goal streaks, and 7-day averages.
 - Food estimates aren't exact, so calories get 50 cal of grace past the target and protein 5g short of it (`CALORIE_GRACE`, `PROTEIN_GRACE_G`).
-- Fat and carbs are tracked and shown but not scored.
+- Fat and carbs are tracked and shown but aren't goals.
 - **Sugar (opt-in):** the agent estimates total and added sugar for every item, so you can track added (refined) vs natural sugar against a daily limit.
 - **Gym consistency is tracked on the side, not scored:** this week's workouts (gym, sport, or run), a GitHub-style grid of every week on the history page, darker on days with two or more, and a streak of weeks that hit your weekly goal.
-- Logging nothing doesn't count as a perfect cut day.
-- A bare total ("I hit 3,000 today") with no foods is saved but doesn't earn the calorie or protein point; the agent asks what was actually eaten.
+- Logging nothing doesn't count as a perfect cut day; it's blank.
+- A bare total ("I hit 3,000 today") with no foods is saved but doesn't count toward the calorie or protein goal; the agent asks what was actually eaten.
 - Weeks run Monday to Sunday.
 - Days roll over at **4am**, so a 1am snack counts for the night before. Sleep counts toward the day you wake up.
-- Scoring starts on `start_day` in the settings table, if it's set.
+- Tracking starts on `start_day` in the settings table, if it's set.
 
 ## MCP tools
 
@@ -67,9 +68,9 @@ Each day earns up to **4 points**, so a week is out of 28:
 |---|---|
 | `log_food` | Log items with calories, protein, fat, carbs, and sugar (total and added); add to an existing meal or backdate up to a week |
 | `edit_food` / `delete_food` | Fix or remove a single item ("actually it was 3 eggs") |
-| `sleep_start` / `sleep_end` | "gn" and "gm"; computes duration and the wake-up point |
+| `sleep_start` / `sleep_end` | "gn" and "gm"; computes duration and the wake-up goal |
 | `log_sleep` | A whole night after the fact ("slept 1 to 8") |
-| `get_status` | Current time, goals, today's and yesterday's meals with ids, workouts, the week's points |
+| `get_status` | Current time, goals, today's and yesterday's meals with ids, workouts, the week's goals |
 | `set_sugar_goal` | Turn on sugar tracking with an added-sugar limit, change it, or turn it off |
 | `log_workout` / `remove_workout` / `set_workout_target` | Mark a gym, sport, or run day on the consistency grid, and set the weekly goal the streak counts |
 | `set_goal` / `log_weight` | Goals and weigh-ins |
@@ -85,13 +86,13 @@ The server also sends the agent instructions on connect: log first and ask at mo
 - **One-time secrets.** The API key is shown once. The setup form uses post/redirect/get with a short-lived HttpOnly cookie, so refreshing can't silently rotate the key. Keys are stored as SHA-256 hashes.
 - **Remembered devices, no logins.** The site sits behind one password (the join code), entered once per phone and remembered with a year-long HttpOnly cookie. Opening the private link Poke gives you does the same.
 - **A hand-rolled MCP server.** Stateless Streamable HTTP with JSON-RPC 2.0, batch support, notifications, and protocol-version negotiation, with no SDK.
-- **No frontend framework.** Pages are server-rendered HTML with three themes (warm white, black, and an ocean gradient), applied before first paint so they don't flash, and frosted translucent cards. The background is an animated ASCII field on a canvas. History is a day-by-day log (four goal icons, tap a day for the numbers) plus server-rendered SVG trend charts: daily bars that are solid when the goal was hit and faded when missed.
+- **No frontend framework.** Pages are server-rendered HTML with light, dark, and ocean themes (following the phone's setting until you pick one), applied before first paint so they don't flash, and frosted translucent cards. Inter for numbers, Newsreader for the journal-style sentences. The background is an animated ASCII field on a canvas. History is a week-by-week table of goals hit, a day-by-day log (a square per goal, tap a day for the numbers) plus server-rendered SVG trend charts: daily bars that are solid when the goal was hit and faded when missed.
 
 ## Stack
 
 - **Runtime:** Cloudflare Workers (TypeScript), D1 (SQLite), and Cron Triggers, all on the free tier
 - **Agent:** [Poke](https://poke.com) over MCP, plus Poke's inbound API for outgoing texts
-- **Frontend:** server-rendered HTML/CSS, inline SVG charts, a canvas ASCII background, Rubik with a Yellowtail script logo, three themes, installable to the home screen
+- **Frontend:** server-rendered HTML/CSS, inline SVG rings and charts, a canvas ASCII background, Inter and Newsreader, light/dark/ocean themes, installable to the home screen
 - **Tests:** Vitest for scoring rules, day boundaries, time parsing, and MCP access
 
 ```
@@ -126,11 +127,11 @@ Tune the rules in `wrangler.toml`:
 |---|---|---|
 | `OWNER_NAME` | `Dara` | the one player the app is for |
 | `GAME_TZ` | `America/Los_Angeles` | the time zone everything runs on |
-| `SLEEP_TARGET_HOURS` | `7` | hours needed for the sleep point |
+| `SLEEP_TARGET_HOURS` | `7` | hours needed for the sleep goal |
 | `WAKE_WEEKDAY` / `WAKE_WEEKEND` | `08:30` / `10:30` | the wake-up deadline |
 | `WAKE_GRACE_MINUTES` | `10` | minutes of grace on the wake-up deadline |
 | `BREAK_DAYS` | | weekdays that use the weekend wake-up time |
-| `CUT_FLOOR_CALORIES` | `1200` | a cut day under this never earns the calorie point |
+| `CUT_FLOOR_CALORIES` | `1200` | a cut day under this never hits the calorie goal |
 
 ### Local development
 

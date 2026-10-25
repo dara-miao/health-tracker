@@ -11,12 +11,12 @@ const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 const INSTRUCTIONS = `This is a personal health tracker (food, sleep, wake-up) with a gym consistency log. The person messaging you is its owner; log what they tell you.
 
-Each day they earn 1 point for their calorie goal (cut: stay at or under; bulk: reach at least), 1 for their protein goal, 1 for sleeping at least the sleep target, and 1 for getting up by the wake-up time (get_status shows it). A week is out of 28. Fat, carbs and workouts are tracked and shown but not scored.
+Each day has four goals: calories (cut: stay at or under; bulk: reach at least), protein, sleeping at least the sleep target, and getting up by the wake-up time (get_status shows it). There are no points; the app shows which goals were hit. Fat, carbs and workouts are tracked and shown but aren't goals.
 
 - When they mention food they ate (or send a photo), estimate it and call log_food right away. Don't ask permission first.
 - Clarifying questions: if something they didn't specify would swing the estimate a lot (roughly 150+ calories or 15g+ protein: a portion of granola, nut butter, rice or pasta, a sauce or dressing, how it was cooked, which restaurant or brand), log your best guess first, then ask ONE short question with your assumption in it, e.g. "Logged the bowl assuming ⅓ cup granola. Was it more like ½ cup?" When they answer, fix that item with edit_food. Don't ask about small things (a handful of berries, a splash of milk), and don't ask more than one question per meal. If they don't answer, keep the guess.
-- Sleep: any way of saying they're going to sleep ("gn", "going to bed", "night", "heading to sleep") means sleep_start. Any way of saying they woke up ("gm", "just woke up", "I'm up", "morning") means sleep_end. The wake-up time counts for a point, so log it right away; if they say they got up earlier ("up since 8"), pass that time. A plain greeting like "hi" or "hey" is not a wake-up. But if get_status shows they're still in bed and it's morning, ask "Did you just wake up?" before logging, and use the time they confirm.
-- Log foods, not totals. If they only give a number ("I hit 3000 today"), ask what they ate. A calorie number with no foods is saved but doesn't earn the calorie or protein point.
+- Sleep: any way of saying they're going to sleep ("gn", "going to bed", "night", "heading to sleep") means sleep_start. Any way of saying they woke up ("gm", "just woke up", "I'm up", "morning") means sleep_end. The wake-up time is a goal, so log it right away; if they say they got up earlier ("up since 8"), pass that time. A plain greeting like "hi" or "hey" is not a wake-up. But if get_status shows they're still in bed and it's morning, ask "Did you just wake up?" before logging, and use the time they confirm.
+- Log foods, not totals. If they only give a number ("I hit 3000 today"), ask what they ate. A calorie number with no foods is saved but doesn't count toward the calorie or protein goal.
 - Sugar: estimate sugar_g and added_sugar_g for every item, whether or not they track sugar. Added sugar is sugar put in during processing or cooking (sweets, soda, sweetened coffee drinks, flavored yogurt, granola, sauces, honey, syrup); sugar inside whole fruit, plain milk and plain yogurt is natural. Sugar isn't scored. When they ask to track it or change the limit ("track my sugar", "set my sugar limit to 21g"), call set_sugar_goal; to stop, call it with null.
 - Workouts: when they say they went to the gym, worked out, lifted, played a sport, or went for a run ("hit legs", "just got back from the gym", "played tennis", "ran 3 miles"), call log_workout right away, once per session. Two separate sessions in a day (gym in the morning, a run at night) are two log_workout calls. Don't log the same session twice: "heading to the gym" then "back from the gym" is one workout (log it when they say they went or are back), and get_status shows what's already logged today. If they say they didn't actually go, or one was logged by mistake, remove_workout. Workouts aren't scored; they fill in a GitHub-style consistency grid. When they set a weekly goal ("I want to go 3 times a week"), set_workout_target.
 - Call get_status before answering questions about progress, and before editing or deleting so you have the right ids.
@@ -51,7 +51,7 @@ Meals: leave meal_id null to start a new meal. Pass an existing meal_id (from ge
       properties: {
         items: { type: "array", items: ITEM_SCHEMA, minItems: 1 },
         meal_id: { type: ["integer", "null"], description: "Add to this existing meal instead of starting a new one." },
-        meal_name: { type: ["string", "null"], description: "Optional label, e.g. 'Breakfast' or 'Chipotle bowl'." },
+        meal_name: { type: ["string", "null"], enum: ["Breakfast", "Lunch", "Dinner", "Snack", null], description: "Which meal: Breakfast, Lunch, Dinner, or Snack, by when they ate it. Never a dish name; the items say what it was." },
         day: { type: ["string", "null"], description: "YYYY-MM-DD to backdate (e.g. 'yesterday I forgot...'). Null for today." },
       },
       required: ["items"],
@@ -85,7 +85,7 @@ Meals: leave meal_id null to start a new meal. Pass an existing meal_id (from ge
   },
   {
     name: "sleep_end",
-    description: "They just woke up; records the night since sleep_start and their wake-up time (worth a point if on time). Leave 'at' null for now.",
+    description: "They just woke up; records the night since sleep_start and their wake-up time (a goal if on time). Leave 'at' null for now.",
     inputSchema: {
       type: "object",
       properties: { at: { type: ["string", "null"], description: "ISO 8601 time if not now." } },
@@ -106,7 +106,7 @@ Meals: leave meal_id null to start a new meal. Pass an existing meal_id (from ge
   {
     name: "get_status",
     description:
-      "The current time, their goals and totals for today, today's and yesterday's meals with ids, workouts, and this week's points.",
+      "The current time, their goals and totals for today, today's and yesterday's meals with ids, workouts, and this week's goals.",
     inputSchema: { type: "object", properties: {} },
   },
   {
@@ -367,11 +367,11 @@ async function callTool(env: Env, player: Player, name: string, args: Args, now:
 
 const TAG_HOW = `put it in the item's description as a tag, e.g. "1 cup vanilla Greek yogurt [sugar 16g, 9g added]": total sugar, then the added part (sweets, sweetened drinks, flavored yogurt, granola, sauces, honey, syrup). Sugar in whole fruit, plain milk and plain yogurt is natural, so "[sugar 14g, 0g added]" for a banana. The app reads the tag and removes it from the name`;
 
-/** A bare total is saved but doesn't earn points; ask for the actual foods. */
+/** A bare total is saved but doesn't count toward the goals; ask for the actual foods. */
 function unitemizedNote(player: Player, saved: { id: number; unitemized: number }[]): string {
   const ids = saved.filter((e) => e.unitemized).map((e) => e.id);
   if (!ids.length) return "";
-  return `Not counted for points: item ${ids.join(", ")} is a total without the actual foods. Rule: a calorie number with no foods doesn't earn the calorie or protein point. Tell ${player.name}, ask what they actually ate, log those foods with log_food, then delete_food item ${ids.join(", ")}.`;
+  return `Not counted: item ${ids.join(", ")} is a total without the actual foods. Rule: a calorie number with no foods doesn't count toward the calorie or protein goal. Tell ${player.name}, ask what they actually ate, log those foods with log_food, then delete_food item ${ids.join(", ")}.`;
 }
 
 /** If a sugar tracker's items came in without sugar, ask the agent to re-save them with the tag. */

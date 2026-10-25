@@ -2,10 +2,15 @@
 // small inline script from JSON embedded in the page.
 import * as db from "./db";
 import type { Env, Player } from "./db";
-import { dayStats, gymSummary, mealTotals, trackingStart, weekPoints, type GymSummary } from "./game";
-import { EMPTY_DAY, calorieGoalMet, proteinGoalMet, scoreDay, wakeGoalMet, wakeMinutes, wakeTarget, type DayStats } from "./scoring";
+import { GOAL_NAMES, dayStats, goalStreaks, gymSentence, gymSummary, lastWeekAverages, mealTotals, todaySentence, trackingStart, weekGoals, weekNotes, type Averages, type GymSummary, type WeekGoals } from "./game";
+import { EMPTY_DAY, GOAL_KEYS, calorieGoalMet, dayStatus, proteinGoalMet, scoreDay, wakeGoalMet, wakeMinutes, wakeTarget, type DayStats, type GoalStatus } from "./scoring";
 import type { Workout } from "./gym";
-import { addDays, gameDay, prettyClock, prettyDay, prettyDuration, prettyTime, weekDays, weekStart } from "./time";
+import { addDays, gameDay, localParts, prettyClock, prettyDay, prettyDuration, prettyTime, weekDays, weekdayOf, weekStart } from "./time";
+
+const FULL_DATE = (day: string) => {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { timeZone: "UTC", weekday: "long", month: "long", day: "numeric" });
+};
 
 export function esc(s: unknown): string {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -17,105 +22,99 @@ const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
 const ACCENT = "var(--series-1)";
 
 const CSS = `
-/* Three themes: warm white (the default), black, ocean. A phone's pick is saved in localStorage
-   and set as data-theme before paint.
-   The accent color is validated per theme; status never uses the accent (hits are a check in ink,
-   misses are amber). */
-:root {
+/* Three themes: light, dark, and ocean. With no saved pick the page follows the phone's light or
+   dark setting; a pick is saved in localStorage and set as data-theme before paint.
+   One accent per theme, checked for contrast on its surfaces. Status never relies on the accent
+   alone: close is amber, missed is an outline, nothing logged is a faint dot. */
+:root, :root[data-theme="warm"] {
   color-scheme: light;
-  --sans: "Rubik", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --script: "Yellowtail", "Brush Script MT", cursive;
-  --page: #f6f0e7;
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --serif: "Newsreader", Georgia, "Times New Roman", serif;
+  --page: #f4f4f2;
   --page-grad: none;
-  --surface: rgba(255, 251, 245, 0.58);
-  --solid: #fffaf3;
-  --raise: rgba(244, 236, 225, 0.55);
-  --ink: #4a3f37;
-  --ink-2: #6e6258;
-  --muted: #8b7f73;
-  --grid: #eee5d8;
-  --axis: #ddd1c1;
-  --ring: rgba(120, 100, 80, 0.10);
-  --series-1: #d17aa0;
-  --good: #4a3f37;
-  --critical: #a85d00;
-  --ascii: rgba(74,63,55,0.20);
-  --ascii-hi: rgba(209,122,160,0.9);
-  --aura-1: rgba(209,122,160,0.16);
-  --aura-2: rgba(75,143,93,0.12);
-  --blur: blur(16px) saturate(1.15);
-}
-:root[data-theme="warm"] {
-  color-scheme: light;
-  --page: #f6f0e7;
-  --page-grad: none;
-  --surface: rgba(255, 251, 245, 0.58);
-  --solid: #fffaf3;
-  --raise: rgba(244, 236, 225, 0.55);
-  --ink: #4a3f37;
-  --ink-2: #6e6258;
-  --muted: #8b7f73;
-  --grid: #eee5d8;
-  --axis: #ddd1c1;
-  --ring: rgba(120, 100, 80, 0.10);
-  --series-1: #d17aa0;
-  --good: #4a3f37;
-  --critical: #a85d00;
-  --ascii: rgba(74,63,55,0.20);
-  --ascii-hi: rgba(209,122,160,0.9);
-  --aura-1: rgba(209,122,160,0.16);
-  --aura-2: rgba(75,143,93,0.12);
+  --surface: rgba(255, 255, 255, 0.72);
+  --solid: #ffffff;
+  --raise: rgba(20, 24, 28, 0.045);
+  --ink: #16181b;
+  --ink-2: #454a51;
+  --muted: #646a72;
+  --grid: #e3e4e6;
+  --axis: #cfd2d6;
+  --ring: rgba(20, 24, 28, 0.08);
+  --series-1: #2f6bd8;
+  --track: #e6e8eb;
+  --mixto: #0e1a30;
+  --good: #16181b;
+  --critical: #a35a00;
+  --ascii: rgba(22, 24, 27, 0.15);
+  --ascii-hi: rgba(47, 107, 216, 0.85);
+  --aura-1: rgba(47, 107, 216, 0.12);
+  --aura-2: rgba(40, 160, 140, 0.08);
   --blur: blur(16px) saturate(1.15);
 }
 :root[data-theme="black"] {
   color-scheme: dark;
-  --page: #050505;
+  --page: #0b0c0e;
   --page-grad: none;
-  --surface: rgba(20, 21, 21, 0.58);
-  --solid: #111212;
-  --raise: rgba(255, 255, 255, 0.05);
-  --ink: #f5f5f2;
-  --ink-2: #b9bab5;
-  --muted: #8b8c88;
-  --grid: #1f2021;
-  --axis: #2c2d2e;
-  --ring: rgba(255, 255, 255, 0.08);
-  --series-1: #f0a6c6;
-  --good: #f5f5f2;
-  --critical: #f0a33a;
-  --ascii: rgba(255,255,255,0.13);
-  --ascii-hi: rgba(240,166,198,0.9);
-  --aura-1: rgba(240,166,198,0.10);
-  --aura-2: rgba(79,154,106,0.10);
+  --surface: rgba(22, 25, 28, 0.72);
+  --solid: #16191c;
+  --raise: rgba(255, 255, 255, 0.06);
+  --ink: #f2f3f5;
+  --ink-2: #c9cdd2;
+  --muted: #9aa0a6;
+  --grid: #202327;
+  --axis: #30343a;
+  --ring: rgba(255, 255, 255, 0.07);
+  --series-1: #6aa0ff;
+  --track: #24282d;
+  --mixto: #ffffff;
+  --good: #f2f3f5;
+  --critical: #f0a34a;
+  --ascii: rgba(255, 255, 255, 0.14);
+  --ascii-hi: rgba(106, 160, 255, 0.9);
+  --aura-1: rgba(106, 160, 255, 0.12);
+  --aura-2: rgba(95, 208, 179, 0.07);
   --blur: blur(16px) saturate(1.15);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --page: #0b0c0e; --surface: rgba(22, 25, 28, 0.72); --solid: #16191c; --raise: rgba(255, 255, 255, 0.06);
+    --ink: #f2f3f5; --ink-2: #c9cdd2; --muted: #9aa0a6; --grid: #202327; --axis: #30343a; --ring: rgba(255, 255, 255, 0.07);
+    --series-1: #6aa0ff; --track: #24282d; --mixto: #ffffff; --good: #f2f3f5; --critical: #f0a34a;
+    --ascii: rgba(255, 255, 255, 0.14); --ascii-hi: rgba(106, 160, 255, 0.9);
+    --aura-1: rgba(106, 160, 255, 0.12); --aura-2: rgba(95, 208, 179, 0.07);
+  }
 }
 :root[data-theme="ocean"] {
   color-scheme: dark;
   --page: #0b3554;
   --page-grad: linear-gradient(170deg, #061626 0%, #0a3150 42%, #0e5470 72%, #1a7d89 100%);
-  --surface: rgba(8, 26, 44, 0.58);
+  --surface: rgba(8, 26, 44, 0.62);
   --solid: #0d2b44;
   --raise: rgba(255, 255, 255, 0.07);
   --ink: #eef6fb;
   --ink-2: #bcd6e5;
-  --muted: #8fb0c4;
+  --muted: #9dbccf;
   --grid: rgba(255, 255, 255, 0.08);
   --axis: rgba(255, 255, 255, 0.18);
   --ring: rgba(255, 255, 255, 0.10);
-  --series-1: #f6b0cd;
+  --series-1: #8fd3ff;
+  --track: rgba(255, 255, 255, 0.10);
+  --mixto: #ffffff;
   --good: #eef6fb;
   --critical: #ffc069;
-  --ascii: rgba(205,236,246,0.16);
-  --ascii-hi: rgba(170,236,246,0.95);
-  --aura-1: rgba(246,176,205,0.10);
-  --aura-2: rgba(126,220,230,0.12);
+  --ascii: rgba(205, 236, 246, 0.16);
+  --ascii-hi: rgba(170, 236, 246, 0.95);
+  --aura-1: rgba(143, 211, 255, 0.12);
+  --aura-2: rgba(126, 220, 230, 0.12);
   --blur: blur(14px) saturate(1.2);
 }
 * { box-sizing: border-box; }
 html { background: var(--page); min-height: 100%; }
 /* The color lives on html only: a body background would paint over the fixed background layers. */
 body { min-height: 100vh; min-height: 100dvh; margin: 0; background: transparent; color: var(--ink); font: 15px/1.45 var(--sans); }
-/* Background: soft pink/green glows (and the ocean fade), a glow that follows the pointer, and an
+/* Background: soft accent glows (and the ocean fade), a glow that follows the pointer, and an
    animated ASCII field drawn on a canvas (see ASCII_JS). */
 body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
   background:
@@ -135,16 +134,16 @@ canvas.ascii { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 
   box-shadow: inset 0 0 0 1px var(--ring), 0 1px 2px rgba(0, 0, 0, 0.03);
 }
 .brand { display: flex; align-items: center; gap: 14px; }
-.wordmark { font: 400 30px/1 var(--script); margin: 0; letter-spacing: 0; color: var(--ink); }
+.wordmark { font: 700 19px/1 var(--sans); margin: 0; letter-spacing: -0.01em; color: var(--ink); }
 .themes { display: inline-flex; gap: 6px; padding: 5px; border-radius: 999px; background: var(--surface); }
 .themes button { width: 20px; height: 20px; margin: 0; padding: 0; border-radius: 50%; cursor: pointer; border: 1px solid var(--axis); }
-.themes button[data-t="warm"] { background: #f6f0e7; }
-.themes button[data-t="black"] { background: #050505; }
+.themes button[data-t="warm"] { background: #f4f4f2; }
+.themes button[data-t="black"] { background: #0b0c0e; }
 .themes button[data-t="ocean"] { background: linear-gradient(160deg, #061626, #0e5470 60%, #1a7d89); }
 .themes button[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink); }
 .themes button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 .topbar { margin: 0 0 18px; }
-.onboard .title.wordmark { font: 400 48px/1.1 var(--script); }
+.onboard .title.wordmark { font: 700 40px/1.1 var(--sans); letter-spacing: -0.02em; }
 main { max-width: 760px; margin: 0 auto; padding-block: 18px 56px; padding-inline: 16px; }
 a { color: inherit; }
 h1 { font: 700 19px/1.1 var(--sans); margin: 0; }
@@ -152,7 +151,7 @@ h2 { font: 600 16px/1.2 var(--sans); color: var(--ink-2); margin: 26px 4px 10px;
 h3 { font: 700 15px/1.2 var(--sans); margin: 0; }
 .big, .v { font-weight: 700; font-variant-numeric: tabular-nums; }
 nav { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 18px; }
-nav h1 { font: 400 30px/1 var(--script); }
+nav h1 { font: 700 19px/1 var(--sans); letter-spacing: -0.01em; }
 nav .links { display: flex; background: var(--surface); border-radius: 999px; padding: 3px; }
 nav .links a { color: var(--muted); text-decoration: none; padding: 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; }
 nav .links a[aria-current] { color: var(--ink); background: var(--raise); }
@@ -373,22 +372,84 @@ fieldset.colors input { width: auto; margin: 0 6px 0 0; accent-color: var(--ink)
 fieldset.colors label:has(input:checked) { box-shadow: inset 0 0 0 2px var(--ink); }
 .lede { color: var(--ink-2); margin: 8px 4px 16px; }
 .title { font: 800 28px/1.1 var(--sans); margin: 6px 4px 0; }
+/* Today */
+.small { font-size: 13px; }
+.row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin: 0 2px 14px; }
+.row h3 { margin: 0; }
+main > section + section, main > section + .tiles2 { margin-top: 12px; }
+.intro { margin: 4px 4px 18px; }
+.eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.prose { font-family: var(--serif); color: var(--ink); margin: 0; }
+.prose.big { font-size: 24px; line-height: 1.36; max-width: 36ch; }
+.prose.note { font-size: 18px; line-height: 1.45; color: var(--ink-2); margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--grid); }
+.card.rings { display: flex; align-items: center; gap: 20px; padding: 18px; }
+.rings svg { width: 168px; height: 168px; flex: none; }
+.rlegend { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.rl { display: flex; gap: 8px; align-items: flex-start; }
+.rl i { flex: none; width: 10px; height: 10px; border-radius: 50%; margin-top: 4px; }
+.rl .rk { font-size: 12px; color: var(--muted); }
+.rl .rv { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+@media (max-width: 380px) { .card.rings { flex-direction: column; } }
+.tiles2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+@media (min-width: 640px) { .tiles2 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.tile2 { padding: 14px 16px; border-radius: 18px; }
+.tile2 .k { font-size: 12px; color: var(--muted); font-weight: 500; }
+.tile2 .v { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.tile2 .v small { font-size: 14px; color: var(--muted); font-weight: 500; margin-left: 2px; }
+.tile2 .s { font-size: 12px; font-weight: 600; color: var(--muted); }
+.tile2 .ok { color: var(--series-1); }
+.tile2 .ok::before { content: none; }
+.macros { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; font-size: 13px; color: var(--muted); margin: 10px 6px 12px; }
+.sm { display: inline-block; box-sizing: border-box; width: 18px; height: 18px; border-radius: 5px; vertical-align: middle; }
+.s-hit { background: var(--series-1); }
+.s-near { border: 3px solid var(--critical); }
+.s-miss { border: 1.5px solid var(--muted); }
+.s-none { width: 5px; height: 5px; border-radius: 50%; background: var(--axis); }
+.s-now { border: 1.6px dashed var(--series-1); }
+.s-future { width: 5px; height: 5px; border-radius: 50%; background: transparent; }
+.wgrid { display: grid; grid-template-columns: 84px repeat(7, minmax(0, 1fr)) 36px; gap: 9px 4px; align-items: center; font-size: 13px; }
+.wgrid .dh, .wday .dh { text-align: center; font-size: 11px; color: var(--muted); }
+.dh.now { color: var(--ink); font-weight: 700; }
+.wgrid .cell { display: flex; justify-content: center; }
+.wgrid .gn { color: var(--ink-2); }
+.wgrid .gc { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.skey { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.skey span { display: inline-flex; align-items: center; gap: 6px; }
+.skey .sm { width: 11px; height: 11px; border-radius: 3px; }
+.skey .s-near { border-width: 2px; }
+.skey .s-none { width: 5px; height: 5px; }
+.card h3 { margin: 0 2px 12px; }
+.avgs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0 2px; }
+.avgs .k { font-size: 11px; color: var(--muted); font-weight: 500; }
+.avgs .v { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.wstrip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.wday { display: flex; flex-direction: column; gap: 6px; }
+.wbar { display: block; height: 28px; border-radius: 8px; background: var(--raise); }
+.wbar.on1 { background: color-mix(in srgb, var(--series-1) 60%, transparent); }
+.wbar.on2 { background: var(--series-1); }
+.wbar.future { background: transparent; box-shadow: inset 0 0 0 1px var(--grid); }
+.gym-log .prose.note { margin-bottom: 14px; }
+.meal-head .tot { margin: 0; font-weight: 500; }
+.days .dhead .dl { width: 18px; text-align: center; font-size: 10px; }
+.days .dp { width: auto; gap: 6px; }
+.days.one .dhead { grid-template-columns: 1fr auto; }
+.rate .rk + .rk { margin-top: 4px; }
 `;
 
 const THEMES = `<div class="themes" role="group" aria-label="Theme">
-  <button type="button" data-t="warm" aria-label="Warm white theme"></button>
-  <button type="button" data-t="black" aria-label="Black theme"></button>
-  <button type="button" data-t="ocean" aria-label="Ocean theme"></button></div>`;
+  <button type="button" data-t="warm" aria-label="Light theme" title="Light"></button>
+  <button type="button" data-t="black" aria-label="Dark theme" title="Dark"></button>
+  <button type="button" data-t="ocean" aria-label="Ocean theme" title="Ocean"></button></div>`;
 
-const THEME_COLORS = { warm: "#f6f0e7", black: "#050505", ocean: "#0b3554" };
+const THEME_COLORS = { warm: "#f4f4f2", black: "#0b0c0e", ocean: "#0b3554" };
 
 // Runs before paint so the saved theme never flashes the default.
-const THEME_BOOT = `<script>try{var t=localStorage.getItem("hb-theme"),c=${JSON.stringify(THEME_COLORS)};if(t&&c[t]){document.documentElement.dataset.theme=t;document.querySelector('meta[name="theme-color"]').content=c[t]}}catch(e){}</script>`;
+const THEME_BOOT = `<script>try{var t=localStorage.getItem("hb-theme"),c=${JSON.stringify(THEME_COLORS)};if(t&&c[t]){document.documentElement.dataset.theme=t;document.querySelectorAll('meta[name="theme-color"]').forEach(function(m){m.content=c[t]})}}catch(e){}</script>`;
 
 const THEME_JS = `<script>
 (() => {
   const colors = ${JSON.stringify(THEME_COLORS)};
-  const current = () => document.documentElement.dataset.theme || "warm";
+  const current = () => document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "black" : "warm");
   const sync = () => {
     const t = current();
     document.querySelectorAll(".themes button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.t === t)));
@@ -489,13 +550,13 @@ function layout(title: string, body: string, script = "", mainClass = ""): Respo
   if (!body.includes("<nav>")) body = `<div class="topbar">${THEMES}</div>${body}`;
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex"><title>${esc(title === "Health Tracker" ? title : `${title} · Health Tracker`)}</title>
+<meta name="robots" content="noindex"><title>${esc(title === "Health" ? title : `${title} · Health`)}</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="alternate icon" href="/favicon.ico">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="manifest" href="/manifest.webmanifest">
 <meta name="apple-mobile-web-app-title" content="Health"><meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#f6f0e7">${THEME_BOOT}
+<meta name="theme-color" content="#f4f4f2" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#0b0c0e" media="(prefers-color-scheme: dark)">${THEME_BOOT}
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400..800&family=Yellowtail&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400..800&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap">
 <style>${CSS}</style></head>
 <body><canvas class="ascii" aria-hidden="true"></canvas><div class="spot" aria-hidden="true"></div><main${mainClass ? ` class="${mainClass}"` : ""}>${body}</main>${script}${THEME_JS}${ASCII_JS}</body></html>`;
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
@@ -508,12 +569,22 @@ function nav(current: "today" | "history"): string {
     <a href="/history" ${cur("history")}>History</a></div></nav>`;
 }
 
-function mealBlock(m: db.MealWithItems, sugar: boolean): string {
+const SLOTS = ["Breakfast", "Lunch", "Dinner", "Snack"] as const;
+
+/** Breakfast, Lunch, Dinner, or Snack: the agent's label when it's one of those, otherwise from when it was logged. */
+export function mealSlot(name: string | null, createdAt: string, tz: string): string {
+  const named = SLOTS.find((x) => name && new RegExp(`\\b${x}\\b`, "i").test(name)) ?? (name && /\bbrunch\b/i.test(name) ? "Brunch" : undefined);
+  if (named) return named;
+  const h = localParts(new Date(`${createdAt.replace(" ", "T")}Z`), tz).hour;
+  return h >= 4 && h < 11 ? "Breakfast" : h >= 11 && h < 15 ? "Lunch" : h >= 17 && h < 22 ? "Dinner" : "Snack";
+}
+
+function mealBlock(m: db.MealWithItems, sugar: boolean, tz: string): string {
   const t = mealTotals(m);
+  const when = prettyTime(`${m.created_at.replace(" ", "T")}Z`, tz).toLowerCase().replace(" ", "");
   const item = (it: db.FoodEntry) =>
     `<li>${esc(it.description)} <span class="muted">(${it.calories} cal, ${it.protein_g}g P, ${it.fat_g}g F, ${it.carbs_g}g C${sugar && it.sugar_g != null ? `, ${it.sugar_g}g sugar${it.added_sugar_g ? ` (${it.added_sugar_g}g added)` : ""}` : ""})</span></li>`;
-  return `<div class="meal"><div class="meal-head"><div>${m.name ? esc(m.name) : "Meal"}</div></div>
-    <div class="tot">${fmt(t.calories)} cal · ${t.protein}g protein · ${t.fat}g fat · ${t.carbs}g carbs</div>
+  return `<div class="meal"><div class="meal-head"><div>${mealSlot(m.name, m.created_at, tz)} <span class="muted small">· ${when}</span></div><div class="tot">${fmt(t.calories)} cal · ${t.protein} g protein</div></div>
     <ul>${m.items.map(item).join("")}</ul></div>`;
 }
 
@@ -529,7 +600,7 @@ export function joinPage(name: string, error = ""): Response {
   return layout(
     "Set up",
     `<header class="onboard">${MARK}<h1 class="title">Set up</h1>
-      <p class="lede">Food, sleep, and wake-up.<br>Four points a day.</p></header>
+      <p class="lede">Food, sleep, and wake-up.<br>Four goals a day.</p></header>
     <form method="post" class="card form">
       ${error ? `<p class="error" role="alert">${esc(error)}</p>` : ""}
       <label for="code">Join code</label><input id="code" name="code" required autocomplete="off" autocapitalize="off" placeholder="The JOIN_CODE secret">
@@ -584,114 +655,162 @@ export function joinSuccess(origin: string, name: string, apiKey: string, meToke
 // ---------- today ----------
 
 const hm = (min: number) => `${Math.floor(min / 60)}:${String(min % 60).padStart(2, "0")}`;
+const shortDur = (min: number) => (min % 60 === 0 ? `${min / 60}h` : min < 60 ? `${min} min` : prettyDuration(min));
+const ST_WORDS: Record<GoalStatus, string> = { hit: "hit", near: "close", miss: "missed", none: "nothing logged", now: "in progress" };
 
-function stat(k: string, v: string, status: string): string {
-  return `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${status}</div></div>`;
+/** One square in a goal grid: filled = hit, amber ring = close, outline = missed, faint dot = nothing logged, dashed = today so far. */
+function mark(st: GoalStatus, tip: string): string {
+  return `<span class="sm s-${st}" role="img" aria-label="${esc(tip)}" title="${esc(tip)}" data-tip="${esc(tip)}"></span>`;
 }
 
-function playerCard(env: Env, p: Player, s: DayStats, day: string, todayPts: number): string {
+const STATUS_KEY = `<p class="rules skey"><span><i class="sm s-hit"></i>hit</span><span><i class="sm s-near"></i>close</span><span><i class="sm s-miss"></i>missed</span><span><i class="sm s-none"></i>nothing logged</span></p>`;
+
+/** Four concentric rings, outside in: calories, protein, sleep, up on time. Each fills toward its goal. */
+function rings(env: Env, p: Player, s: DayStats, day: string, today: string): string {
   const r = db.rules(env);
-  const tiles: string[] = [];
+  const st = dayStatus(p, s, r, day, today);
+  const cut = p.goal_type === "cut";
+  const over = cut && p.calorie_target != null && st.cal !== "now" && st.cal !== "hit" && st.cal !== "none";
+  const items = [
+    {
+      name: "Calories",
+      pct: p.calorie_target ? s.calories / p.calorie_target : 0,
+      text: p.calorie_target ? `${fmt(s.calories)} of ${fmt(p.calorie_target)}` : `${fmt(s.calories)}`,
+      warn: over,
+    },
+    { name: "Protein", pct: p.protein_target ? s.protein / p.protein_target : 0, text: p.protein_target ? `${s.protein} of ${p.protein_target} g` : `${s.protein} g`, warn: false },
+    { name: "Sleep", pct: s.sleepMinutes == null ? 0 : s.sleepMinutes / r.sleepTargetMinutes, text: s.sleepMinutes == null ? "not logged" : prettyDuration(s.sleepMinutes), warn: false },
+    {
+      name: "Up on time",
+      pct: !s.wakeAt ? 0 : st.wake === "hit" ? 1 : 0.6,
+      text: s.wakeAt ? `${prettyTime(s.wakeAt, r.tz).toLowerCase().replace(" ", "")}, by ${prettyClock(wakeTarget(day, r)).toLowerCase().replace(" ", "")}` : "not logged",
+      warn: st.wake === "near" || st.wake === "miss",
+    },
+  ];
+  const R = [92, 76, 60, 44];
+  const tone = (k: number) => `color-mix(in srgb, var(--series-1) ${100 - k * 22}%, var(--mixto))`;
+  const arcs = items
+    .map((it, k) => {
+      const c = 2 * Math.PI * R[k];
+      const len = c * Math.max(0, Math.min(1, it.pct));
+      return `<circle cx="100" cy="100" r="${R[k]}" fill="none" stroke="var(--track)" stroke-width="13"/>${
+        len > 0 ? `<circle cx="100" cy="100" r="${R[k]}" fill="none" stroke="${it.warn ? "var(--critical)" : tone(k)}" stroke-width="13" stroke-linecap="round" stroke-dasharray="${len.toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 100 100)"/>` : ""
+      }`;
+    })
+    .join("");
+  const legend = items
+    .map((it, k) => `<div class="rl"><i style="background:${it.warn ? "var(--critical)" : tone(k)}"></i><div><div class="rk">${it.name}</div><div class="rv">${esc(it.text)}</div></div></div>`)
+    .join("");
+  const label = items.map((it) => `${it.name}: ${it.text}`).join(", ");
+  return `<section class="card rings"><svg viewBox="0 0 200 200" role="img" aria-label="${esc(label)}">${arcs}</svg><div class="rlegend">${legend}</div></section>`;
+}
+
+/** Big numbers for the four goals, then the unscored macros on one line. */
+function tiles(env: Env, p: Player, s: DayStats, day: string): string {
+  const r = db.rules(env);
+  const tile = (k: string, v: string, status: string) => `<div class="card tile2"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${status}</div></div>`;
+  const out: string[] = [];
+  const done = '<span class="ok">Done</span>';
   if (p.calorie_target != null && p.goal_type) {
-    const ok = calorieGoalMet(p, s, r);
     const cut = p.goal_type === "cut";
     const gap = Math.abs(p.calorie_target - s.calories);
-    let st = '<span class="muted">Nothing logged</span>';
-    if (s.foodCount > 0) {
-      if (cut && s.calories > p.calorie_target) st = ok ? `<span class="ok">Within grace</span> · ${fmt(gap)} over` : `<span class="bad">${fmt(gap)} over</span>`;
-      else if (cut) st = ok ? `<span class="ok">On target</span> · ${fmt(gap)} left` : `${fmt(gap)} left`;
-      else st = ok ? `<span class="ok">Hit</span>` : `${fmt(gap)} to go`;
-      if (s.unitemized) st = `<span class="bad">Total with no foods · not counted</span>`;
+    let st = "Nothing logged";
+    if (s.unitemized) st = '<span class="bad">A total with no foods, not counted</span>';
+    else if (s.foodCount > 0) {
+      if (cut && s.calories > p.calorie_target) st = calorieGoalMet(p, s, r) ? `Within grace · ${fmt(gap)} over` : `<span class="bad">${fmt(gap)} over</span>`;
+      else if (cut) st = `${fmt(gap)} left`;
+      else st = calorieGoalMet(p, s, r) ? done : `${fmt(gap)} to go`;
     }
-    tiles.push(stat(`Calories · ${cut ? "max" : "min"} ${fmt(p.calorie_target)}`, fmt(s.calories), st));
+    out.push(tile(`Calories · ${cut ? "max" : "min"} ${fmt(p.calorie_target)}`, fmt(s.calories), st));
   }
   if (p.protein_target != null) {
-    const ok = proteinGoalMet(p, s, r);
-    tiles.push(stat(`Protein · min ${p.protein_target}g`, `${s.protein}<small>g</small>`, s.unitemized ? '<span class="bad">Not counted</span>' : ok ? '<span class="ok">Hit</span>' : `${Math.max(0, p.protein_target - s.protein)}g to go`));
+    const st = s.unitemized ? '<span class="bad">Not counted</span>' : proteinGoalMet(p, s, r) ? done : `${Math.max(0, p.protein_target - s.protein)} g to go`;
+    out.push(tile(`Protein · min ${p.protein_target} g`, `${s.protein}<small>g</small>`, st));
   }
-  {
-    const fatSt = p.fat_target == null ? "Not scored" : s.fat >= p.fat_target ? '<span class="ok">Hit</span> · not scored' : `${p.fat_target - s.fat}g low · not scored`;
-    tiles.push(stat(p.fat_target != null ? `Fat · min ${p.fat_target}g` : "Fat", `${s.fat}<small>g</small>`, fatSt));
-    const carbSt = p.carb_target == null ? "Not scored" : s.carbs >= p.carb_target ? '<span class="ok">Hit</span> · not scored' : `${p.carb_target - s.carbs}g to go · not scored`;
-    tiles.push(stat(p.carb_target != null ? `Carbs · about ${p.carb_target}g` : "Carbs", `${s.carbs}<small>g</small>`, carbSt));
-  }
-  const sugarTile =
-    p.sugar_target != null
-      ? (() => {
-          const added = s.addedSugar ?? 0;
-          const st = s.sugar == null ? "No estimates yet" : `${added > p.sugar_target ? `<span class="bad">${added - p.sugar_target}g over</span>` : `${p.sugar_target - added}g of added left`} · ${s.sugar - added}g natural · not scored`;
-          return `<div class="stat wide"><div class="k">Sugar · added max ${p.sugar_target}g</div><div class="v">${s.sugar == null ? "–" : `${added}<small>g added</small> <span class="of">${s.sugar}<small>g total</small></span>`}</div><div class="s">${st}</div></div>`;
-        })()
-      : "";
   const sleep = s.sleepMinutes;
-  tiles.push(
-    stat(
-      `Sleep · ${prettyDuration(r.sleepTargetMinutes).replace(" 00m", "")} goal`,
+  out.push(
+    tile(
+      `Sleep · ${shortDur(r.sleepTargetMinutes)}+`,
       sleep != null ? hm(sleep) : "–",
-      sleep == null ? "Not logged" : sleep >= r.sleepTargetMinutes ? '<span class="ok">Hit</span>' : `<span class="bad">${prettyDuration(r.sleepTargetMinutes - sleep).replace(" 00m", "")} short</span>`,
+      sleep == null ? "Not logged" : sleep >= r.sleepTargetMinutes ? done : `<span class="bad">${shortDur(r.sleepTargetMinutes - sleep)} short</span>`,
     ),
   );
   const target = wakeTarget(day, r);
   const late = s.wakeAt ? wakeMinutes(s.wakeAt, r.tz) - target : 0;
-  tiles.push(
-    stat(
-      `Up by ${prettyClock(target).replace(" AM", "").replace(" PM", "")}`,
-      s.wakeAt ? prettyTime(s.wakeAt, env.GAME_TZ).replace(/ (AM|PM)/, (m) => `<small>${m.toLowerCase()}</small>`) : "–",
-      !s.wakeAt ? "Not logged" : wakeGoalMet(day, s, r) ? '<span class="ok">On time</span>' : `<span class="bad">${late} min late</span>`,
+  out.push(
+    tile(
+      `Up by ${prettyClock(target).replace(/ (AM|PM)/, "")}`,
+      s.wakeAt ? prettyTime(s.wakeAt, r.tz).replace(/ (AM|PM)/, (m) => `<small>${m.trim().toLowerCase()}</small>`) : "–",
+      !s.wakeAt ? "Not logged" : wakeGoalMet(day, s, r) ? done : `<span class="bad">${late} min late</span>`,
     ),
   );
-  return `<div class="pcard"><div class="head"><h3>Today <span class="muted" style="font-weight:500">· ${p.goal_type ?? "no goal yet"}</span></h3><span class="t">${todayPts}/4</span></div>
-    <div class="stats">${tiles.join("")}${sugarTile}</div></div>`;
+  const extras = [
+    p.fat_target != null ? `Fat ${s.fat} / ${p.fat_target} g` : `Fat ${s.fat} g`,
+    p.carb_target != null ? `Carbs ${s.carbs} / ~${p.carb_target} g` : `Carbs ${s.carbs} g`,
+    ...(p.sugar_target != null ? [s.sugar == null ? `Added sugar – / ${p.sugar_target} g` : `Added sugar ${s.addedSugar ?? 0} / ${p.sugar_target} g`] : []),
+  ];
+  return `<section class="tiles2">${out.join("")}</section><p class="macros">${extras.map((x) => `<span>${x}</span>`).join("")}</p>`;
 }
 
-/** Watch-face ring: the arc is today's points out of 4, the number is the week total. */
-function face(weekPts: number, todayPts: number): string {
-  const C = 2 * Math.PI * 50;
-  const arc = (Math.min(todayPts, 4) / 4) * C;
-  return `<div class="face"><svg viewBox="0 0 120 120" role="img" aria-label="${weekPts} points this week, ${todayPts} of 4 today">
-      <circle cx="60" cy="60" r="50" fill="none" stroke="var(--raise)" stroke-width="10"/>
-      ${arc > 0 ? `<circle cx="60" cy="60" r="50" fill="none" stroke="${ACCENT}" stroke-width="10" stroke-linecap="round" stroke-dasharray="${arc.toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 60 60)"/>` : ""}
-      <text x="60" y="71" text-anchor="middle" fill="var(--ink)" font-family="Rubik, sans-serif" font-weight="700" font-size="34">${weekPts}</text>
-    </svg><div class="n">This week</div><div class="d">${todayPts}/4 today</div></div>`;
+/** A row per goal, a square per day, and how many days it was hit. */
+function weekGrid(w: WeekGoals, today: string): string {
+  const heads = w.days.map((d) => `<span class="dh${d === today ? " now" : ""}" title="${prettyDay(d)}">${prettyDay(d).slice(0, 1)}</span>`).join("");
+  const rows = GOAL_KEYS.map((k) => {
+    const cells = w.days
+      .map((d, i) => {
+        const st = w.status[i]?.[k];
+        if (!st) return `<span class="cell"><span class="sm s-future" aria-hidden="true"></span></span>`;
+        return `<span class="cell">${mark(st, `${prettyDay(d)} · ${GOAL_NAMES[k]}: ${ST_WORDS[st]}`)}</span>`;
+      })
+      .join("");
+    const c = w.counts[k];
+    return `<span class="gn">${GOAL_NAMES[k]}</span>${cells}<span class="gc">${c.of ? `${c.hit}/${c.of}` : "–"}</span>`;
+  }).join("");
+  return `<div class="wgrid"><span></span>${heads}<span></span>${rows}</div>`;
 }
 
-/** The week so far: a bar per day, its height the day's points out of 4. */
-function weekFace(w: Awaited<ReturnType<typeof weekPoints>>, today: string): string {
-  const cols = w.days
-    .map((d, k) => {
-      const v = w.perDay[k];
-      const tip = `${prettyDay(d)}: ${v == null ? (d > today ? "coming up" : "not counted") : `${v} of 4${d === today ? " so far" : ""}`}`;
-      return `<div class="wd${d === today ? " now" : ""}" title="${esc(tip)}" aria-label="${esc(tip)}"><div class="wb"><span style="height:${((v ?? 0) / 4) * 100}%"></span></div><b>${v ?? "·"}</b><small>${prettyDay(d).slice(0, 2)}</small></div>`;
-    })
-    .join("");
-  return `<div class="face week7"><div class="wds">${cols}</div><div class="n">${w.points}<span class="muted"> / 28</span></div><div class="d">out of 4 a day</div></div>`;
+function averagesCard(a: Averages): string {
+  const cell = (k: string, v: string) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  return `<section class="card"><h3>Last seven days</h3><div class="avgs">${[
+    cell("Sleep", a.sleepMinutes == null ? "–" : prettyDuration(a.sleepMinutes)),
+    cell("Up at", a.wakeMinutes == null ? "–" : prettyClock(a.wakeMinutes).replace(/ (AM|PM)/, "")),
+    cell("Calories", a.calories == null ? "–" : fmt(a.calories)),
+    cell("Protein", a.protein == null ? "–" : `${a.protein} g`),
+  ].join("")}</div></section>`;
 }
 
 export async function homePage(env: Env, player: Player, meToken: string, now: Date): Promise<Response> {
   const today = gameDay(now, env.GAME_TZ);
   const start = weekStart(today);
-  const r = db.rules(env);
-  const [s, week, todayMeals, yMeals] = await Promise.all([
+  const [s, week, streaks, avgs, gym, todayMeals, yMeals] = await Promise.all([
     dayStats(env, player.id, today),
-    weekPoints(env, player, start, today),
+    weekGoals(env, player, start, today),
+    goalStreaks(env, player, today),
+    lastWeekAverages(env, player, today),
+    gymSummary(env, player, today),
     db.mealsForDay(env.DB, player.id, today),
     db.mealsForDay(env.DB, player.id, addDays(today, -1)),
   ]);
-  const todayPts = scoreDay(player, s, r, today).points;
+  const r = db.rules(env);
+  const notes = weekNotes(week, streaks, today);
   const sugar = player.sugar_target != null;
   const list = (ms: db.MealWithItems[], empty: string) =>
-    ms.length ? ms.map((m) => mealBlock(m, sugar)).join("") : `<p class="muted" style="margin:0">${empty}</p>`;
+    ms.length ? ms.map((m) => mealBlock(m, sugar, env.GAME_TZ)).join("") : `<p class="muted" style="margin:0">${empty}</p>`;
   return layout(
-    "Health Tracker",
+    "Health",
     `${nav("today")}
-    <div class="date"><span>${prettyDay(today)}</span><span>Week of ${prettyDay(start).slice(4)}</span></div>
-    <div class="faces">${face(week.points, todayPts)}${weekFace(week, today)}</div>
-    <div class="players" style="margin-top:10px">${playerCard(env, player, s, today, todayPts)}</div>
-    <p class="rules">1 point each for calories, protein, ${prettyDuration(r.sleepTargetMinutes).replace(" 00m", "")}+ sleep, and being up by ${prettyClock(r.wakeWeekday)} (weekends ${prettyClock(r.wakeWeekend)}, ${r.wakeGraceMinutes} min grace). Calories get ${r.calorieGrace} cal of grace and protein ${r.proteinGrace}g.</p>
-    ${await gymPanel(env, player, meToken, today)}
+    <section class="intro"><div class="eyebrow">${FULL_DATE(today)}</div><p class="prose big">${esc(todaySentence(env, player, s, today))}</p></section>
+    ${rings(env, player, s, today, today)}
+    ${tiles(env, player, s, today)}
+    <section class="card tips"><div class="row"><h3>This week</h3><span class="muted small">${prettyDay(start).slice(4)} to ${prettyDay(addDays(start, 6)).slice(4)}</span></div>
+      ${weekGrid(week, today)}${STATUS_KEY}<p class="tip-out" aria-live="polite"></p>
+      ${notes ? `<p class="prose note">${esc(notes)}</p>` : ""}</section>
+    ${averagesCard(avgs)}
+    ${gymPanel(player, gym, meToken, today)}
     <h2>Today's food</h2><div class="card">${list(todayMeals, "Nothing logged yet today. Text Poke what you ate.")}</div>
     <h2>Yesterday</h2><div class="card">${list(yMeals, "Nothing logged yesterday.")}</div>
-    ${sugarPanel(player, meToken)}`,
+    ${sugarPanel(player, meToken)}
+    <p class="rules">Goals: calories (${r.calorieGrace} cal of grace), protein (${r.proteinGrace} g of grace), ${shortDur(r.sleepTargetMinutes)}+ of sleep, and up by ${prettyClock(r.wakeWeekday)} on weekdays or ${prettyClock(r.wakeWeekend)} on weekends (${r.wakeGraceMinutes} min grace). Close means within 10% on food or 30 minutes on sleep and wake-up.</p>`,
     `${TIP_JS}<script>setTimeout(() => location.reload(), 5 * 60 * 1000)</script>`,
   );
 }
@@ -734,7 +853,7 @@ function gymRow(p: Player, g: GymSummary, from: string, today: string): string {
   const parts = [
     `This week: ${g.thisWeek}${p.workout_target ? ` of ${p.workout_target}` : ""}`,
     ...(p.workout_target ? [] : ["no goal yet"]),
-    ...(g.streak ? [`🔥 ${g.streak}-week streak`] : []),
+    ...(g.streak ? [`${g.streak}-week streak`] : []),
     `${g.total} total`,
   ];
   return `<div class="gym-row" style="--gc:${ACCENT}">
@@ -767,18 +886,19 @@ export async function historyPage(env: Env, player: Player, now: Date, range: st
   const weeks: string[] = [];
   for (let w = weekStart(today); w >= weekStart(start); w = addDays(w, -7)) weeks.push(w);
   const [scored, stats, weights] = await Promise.all([
-    Promise.all(weeks.map((w) => weekPoints(env, player, w, w === weekStart(today) ? today : addDays(w, 6)))),
+    Promise.all(weeks.map((w) => weekGoals(env, player, w, today))),
     db.statsForRange(env.DB, player.id, from, today),
     db.weightsForPlayer(env.DB, player.id),
   ]);
-  const best = Math.max(...scored.filter((w) => w.start !== weekStart(today)).map((w) => w.points), 0);
-  const dayHeads = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map((d) => `<th class="n">${d}</th>`).join("");
+  const goalHeads = GOAL_KEYS.map((k) => `<th class="n">${GOAL_NAMES[k]}</th>`).join("");
   const weekRows = scored
     .map((w) => {
       const live = w.start === weekStart(today);
-      return `<tr><td>${prettyDay(w.start).slice(4)}${live ? ' <span class="muted">· now</span>' : ""}</td>
-        ${w.perDay.map((v) => `<td class="n${v === 4 ? " p4" : ""}">${v == null ? '<span class="muted">·</span>' : v}</td>`).join("")}
-        <td class="n"><strong>${w.points}</strong>${!live && w.points === best && best > 0 ? " 🏆" : ""}</td></tr>`;
+      const cells = GOAL_KEYS.map((k) => {
+        const c = w.counts[k];
+        return `<td class="n">${c.of ? `<strong>${c.hit}</strong><span class="muted">/${c.of}</span>` : '<span class="muted">–</span>'}</td>`;
+      }).join("");
+      return `<tr><td>${prettyDay(w.start).slice(4)}${live ? ' <span class="muted">· now</span>' : ""}</td>${cells}</tr>`;
     })
     .join("");
 
@@ -793,8 +913,8 @@ export async function historyPage(env: Env, player: Player, now: Date, range: st
     `${nav("history")}
     <div class="date"><span>Since ${prettyDay(start)}</span><span>${total} day${total === 1 ? "" : "s"}</span></div>${chips}
     <h2>Weeks</h2>
-    <div class="card table-wrap"><table class="wk"><thead><tr><th>Week of</th>${dayHeads}<th class="n">Total</th></tr></thead>
-    <tbody>${weekRows}</tbody></table><p class="rules">Out of 28. 🏆 marks your best finished week. Underlined days are a perfect 4.</p></div>
+    <div class="card table-wrap"><table class="wk"><thead><tr><th>Week of</th>${goalHeads}</tr></thead>
+    <tbody>${weekRows}</tbody></table><p class="rules">Days each goal was hit, out of the days it was logged.</p></div>
     <h2>Goals hit</h2>${hitRates(env, me, days, today)}
     <h2>Day by day</h2>${dayByDay(env, me, days, today)}
     <h2>Trends</h2>${trends(env, me, days, today, weights)}
@@ -812,25 +932,22 @@ async function historyStart(env: Env, player: Player, today: string): Promise<st
 const dayCount = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / 864e5) + 1;
 const daysFrom = (from: string, to: string) => Array.from({ length: dayCount(from, to) }, (_, k) => addDays(from, k));
 
-const GOALS = [
-  { key: "calOk", icon: "🔥", name: "Calories" },
-  { key: "proteinOk", icon: "💪", name: "Protein" },
-  { key: "sleepOk", icon: "😴", name: "Sleep" },
-  { key: "wakeOk", icon: "⏰", name: "On time" },
-] as const;
+const ST_LABEL: Record<GoalStatus, string> = { hit: "hit", near: "close", miss: "missed", none: "nothing logged", now: "in progress" };
 
-/** Share of finished days (today is still going) each goal was hit. */
+/** How often each goal was hit, out of the finished days it was logged. */
 function hitRates(env: Env, { p, stat }: Series, days: string[], today: string): string {
   const r = db.rules(env);
   const done = days.filter((d) => d < today);
   if (!done.length) return `<div class="card muted">Hit rates show up after the first full day.</div>`;
-  const scores = done.map((d) => scoreDay(p, stat(d), r, d));
-  const cells = GOALS.map((g) => {
-    const pct = Math.round((scores.filter((x) => x[g.key]).length / scores.length) * 100);
-    return `<div class="rate"><div class="rk">${g.name}</div><div class="rv">${pct}<small>%</small></div>
-      <div class="rbar"><span style="width:${pct}%;background:${ACCENT}"></span></div></div>`;
+  const statuses = done.map((d) => dayStatus(p, stat(d), r, d, today));
+  const cells = GOAL_KEYS.map((k) => {
+    const judged = statuses.filter((x) => x[k] !== "none");
+    const hit = judged.filter((x) => x[k] === "hit").length;
+    const pct = judged.length ? Math.round((hit / judged.length) * 100) : 0;
+    return `<div class="rate"><div class="rk">${GOAL_NAMES[k]}</div><div class="rv">${judged.length ? `${pct}<small>%</small>` : "–"}</div>
+      <div class="rbar"><span style="width:${pct}%;background:${ACCENT}"></span></div><div class="rk">${hit}/${judged.length} days</div></div>`;
   }).join("");
-  return `<div class="card"><div class="rates">${cells}</div><p class="rules">Out of ${done.length} finished day${done.length === 1 ? "" : "s"}.</p></div>`;
+  return `<div class="card"><div class="rates">${cells}</div><p class="rules">Days with nothing logged don't count either way.</p></div>`;
 }
 
 /** What happened on a day, in words. */
@@ -845,21 +962,19 @@ function dayDetail(env: Env, p: Player, s: DayStats): string {
   return parts.join(" · ");
 }
 
-/** Newest day first, with the four goals as icons, filled when hit. Tap a day for the numbers. */
+/** Newest day first, with a square per goal. Tap a day for the numbers. */
 function dayByDay(env: Env, { p, stat }: Series, days: string[], today: string): string {
   const r = db.rules(env);
-  const icons = (sc: ReturnType<typeof scoreDay>) =>
-    GOALS.map((g) => `<span class="gi${sc[g.key] ? " hit" : ""}" title="${g.name}: ${sc[g.key] ? "hit" : "missed"}">${g.icon}</span>`).join("");
   const rows = [...days]
     .reverse()
     .map((d) => {
-      const sc = scoreDay(p, stat(d), r, d);
-      const cell = `<span class="dp" style="--gc:${ACCENT}" aria-label="${sc.points} of 4">${icons(sc)}<b>${sc.points}</b></span>`;
-      return `<details class="drow"><summary><span class="dd">${d === today ? "Today" : prettyDay(d)}${d === today ? ' <small class="muted">so far</small>' : ""}</span>${cell}</summary><div class="ddet"><p>${dayDetail(env, p, stat(d))}</p></div></details>`;
+      const st = dayStatus(p, stat(d), r, d, today);
+      const cells = GOAL_KEYS.map((k) => mark(st[k], `${GOAL_NAMES[k]}: ${ST_LABEL[st[k]]}`)).join("");
+      return `<details class="drow"><summary><span class="dd">${d === today ? "Today" : prettyDay(d)}${d === today ? ' <small class="muted">so far</small>' : ""}</span><span class="dp">${cells}</span></summary><div class="ddet"><p>${dayDetail(env, p, stat(d))}</p></div></details>`;
     })
     .join("");
-  return `<div class="card days one">${rows}
-    <p class="rules">🔥 calories · 💪 protein · 😴 ${prettyDuration(r.sleepTargetMinutes).replace(" 00m", "")}+ sleep · ⏰ up on time. Faded means missed. Tap a day for the numbers.</p></div>`;
+  return `<div class="card days one"><div class="dhead"><span></span><span class="dp">${GOAL_KEYS.map((k) => `<span class="dl" title="${GOAL_NAMES[k]}">${GOAL_NAMES[k].slice(0, 3)}</span>`).join("")}</span></div>${rows}
+    ${STATUS_KEY}<p class="rules">Calories, protein, sleep, up on time. Tap a day for the numbers.</p></div>`;
 }
 
 // Wake-up dots plot (WAKE_SPAN - minutes after midnight), so 5am sits at the top and 1pm at the bottom.
@@ -950,7 +1065,7 @@ function sugarCard(x: Series, days: string[], today: string, axis: string, H: nu
     .join("");
   const g = goalMarks(W, H, y(limit), { dir: "max", label: `${limit}g added` });
   const svg = `<div class="cbox"><svg viewBox="0 0 ${W} ${H}" class="bars" role="img">${g.zone}<line x1="0" x2="${W}" y1="${y(limit)}" y2="${y(limit)}" class="goal"/>${marks}</svg>${g.label}</div>`;
-  return `<div class="card tcard tips"><h3>🍬 Sugar</h3><div class="tcols n1"><div class="tcol" style="--gc:${color}">
+  return `<div class="card tcard tips"><h3>Sugar</h3><div class="tcols n1"><div class="tcol" style="--gc:${color}">
     <div class="tlabel"><span class="muted">solid = added, max ${limit}g · faded = natural</span></div>${svg}${axis}</div></div><p class="tip-out" aria-live="polite"></p></div>`;
 }
 
@@ -988,7 +1103,7 @@ function trends(env: Env, x: Series, days: string[], today: string, weights: { d
   const food = (s: DayStats, v: number) => (s.foodCount ? v : null);
   const metrics: Metric[] = [
     {
-      title: "🔥 Calories",
+      title: "Calories",
       goal: (p) => (p.calorie_target == null ? "no goal" : p.goal_type === "cut" ? `stay between ${fmt(r.cutFloorCalories)} and ${fmt(p.calorie_target)}` : `reach ${fmt(p.calorie_target)}`),
       chart: (x) => barChart(bars(x, (s) => food(s, s.calories), (s, d) => scoreDay(x.p, s, r, d).calOk, (_, v) => `${fmt(v)} cal`), ACCENT, () => x.p.calorie_target, {
             h,
@@ -999,29 +1114,29 @@ function trends(env: Env, x: Series, days: string[], today: string, weights: { d
           }),
     },
     {
-      title: "💪 Protein",
+      title: "Protein",
       goal: (p) => (p.protein_target == null ? "no goal" : `reach ${p.protein_target}g`),
       chart: (x) => barChart(bars(x, (s) => food(s, s.protein), (s) => proteinGoalMet(x.p, s, r), (_, v) => `${v}g protein`), ACCENT, () => x.p.protein_target, { h, goal: { dir: "min", label: `${x.p.protein_target}g` } }),
     },
     {
-            title: "🥑 Fat",
+            title: "Fat",
             goal: (p: Player) => (p.fat_target == null ? "not scored" : `reach ${p.fat_target}g · not scored`),
             chart: (x: Series) => barChart(bars(x, (s) => food(s, s.fat), (s) => x.p.fat_target == null || s.fat >= x.p.fat_target, (_, v) => `${v}g fat`), ACCENT, () => x.p.fat_target, { h, goal: { dir: "min", label: `${x.p.fat_target}g` } }),
           },
     {
-            title: "🍞 Carbs",
+            title: "Carbs",
             goal: (p: Player) => (p.carb_target == null ? "not scored" : `about ${p.carb_target}g · not scored`),
             chart: (x: Series) =>
               barChart(bars(x, (s) => food(s, s.carbs), (s) => x.p.carb_target == null || Math.abs(s.carbs - x.p.carb_target) <= x.p.carb_target * 0.15, (_, v) => `${v}g carbs`), ACCENT, () => x.p.carb_target, { h, goal: { dir: "about", label: `${x.p.carb_target}g` } }),
     },
     {
-      title: "😴 Sleep",
+      title: "Sleep",
       same: true,
       goal: () => `${prettyDuration(r.sleepTargetMinutes).replace(" 00m", "")}+`,
       chart: (x) => barChart(bars(x, (s) => (s.sleepMinutes == null ? null : s.sleepMinutes / 60), (s) => (s.sleepMinutes ?? 0) >= r.sleepTargetMinutes, (s) => prettyDuration(s.sleepMinutes!)), ACCENT, () => r.sleepTargetMinutes / 60, { h, goal: { dir: "min", label: prettyDuration(r.sleepTargetMinutes).replace(" 00m", "") } }),
     },
     {
-      title: "⏰ Wake-up",
+      title: "Wake-up",
       same: true,
       goal: () => `by ${clock(r.wakeWeekday)}, weekends ${clock(r.wakeWeekend)}`,
       // Earlier is higher, so a dot above the line is on time.
@@ -1041,7 +1156,7 @@ function trends(env: Env, x: Series, days: string[], today: string, weights: { d
     })
     .join("");
   const sugar = x.p.sugar_target != null ? sugarCard(x, days, today, axis, h) : "";
-  const weight = `<div class="card tcard tips"><h3>⚖️ Weight</h3><div class="tcols n1"><div class="tcol"><div class="tlabel"><span class="muted">${x.p.goal_weight_lb != null ? `goal ${x.p.goal_weight_lb} lb` : "no goal weight"}</span></div>
+  const weight = `<div class="card tcard tips"><h3>Weight</h3><div class="tcols n1"><div class="tcol"><div class="tlabel"><span class="muted">${x.p.goal_weight_lb != null ? `goal ${x.p.goal_weight_lb} lb` : "no goal weight"}</span></div>
     ${lineChart(days.map((d) => ({ day: d, value: weights.find((w) => w.day === d)?.lb ?? null })), ACCENT, x.p.goal_weight_lb)}${axis}</div></div><p class="tip-out" aria-live="polite"></p></div>`;
   return `<div class="tgrid">${cards}${sugar}${weight}</div><p class="rules">Solid means the goal was hit, faded means missed. The dashed line is the goal, and the shaded side is where you want to be (≤ stay under, ≥ reach, a range means stay between the two lines). On wake-up, higher is earlier. Tap a bar or dot for the number.</p>`;
 }
@@ -1061,11 +1176,18 @@ document.querySelectorAll(".tips, .gym").forEach((card) => {
 
 // ---------- controls on the page (work without the agent) ----------
 
-/** One-tap workout logging and the weekly goal, so Poke doesn't need the newer workout tools. */
-async function gymPanel(env: Env, p: Player, meToken: string, today: string): Promise<string> {
-  const g = await gymSummary(env, p, today);
+/** This week's workouts as a strip, a line about them, and one-tap logging (so Poke doesn't need the workout tools). */
+function gymPanel(p: Player, g: GymSummary, meToken: string, today: string): string {
   const action = `/me/${esc(meToken)}/workout`;
+  const start = weekStart(today);
   const yesterday = addDays(today, -1);
+  const strip = weekDays(start)
+    .map((d) => {
+      const n = g.workouts.filter((w) => w.day === d).length;
+      const tip = `${prettyDay(d)}: ${n ? `${n} workout${n > 1 ? "s" : ""}` : d > today ? "coming up" : "rest"}`;
+      return `<div class="wday"><span class="wbar${n >= 2 ? " on2" : n ? " on1" : ""}${d > today ? " future" : ""}" role="img" aria-label="${esc(tip)}" title="${esc(tip)}"></span><span class="dh${d === today ? " now" : ""}">${prettyDay(d).slice(0, 1)}</span></div>`;
+    })
+    .join("");
   const recent = g.workouts.filter((w) => w.day === today || w.day === yesterday).reverse();
   const list = recent.length
     ? `<ul class="wlist">${recent
@@ -1076,15 +1198,17 @@ async function gymPanel(env: Env, p: Player, meToken: string, today: string): Pr
         .join("")}</ul>`
     : "";
   const goal = Array.from({ length: 7 }, (_, k) => `<option value="${k + 1}"${p.workout_target === k + 1 ? " selected" : ""}>${k + 1}</option>`).join("");
-  return `<h2 id="gym">Log a workout</h2><div class="card gym-log">
+  return `<section class="card gym-log" id="gym"><div class="row"><h3>Workouts</h3><span class="small"><b>${g.thisWeek}</b><span class="muted">${p.workout_target ? ` / ${p.workout_target}` : ""} this week</span></span></div>
+    <div class="wstrip">${strip}</div>
+    <p class="prose note">${esc(gymSentence(p, g, start))}</p>
     <form method="post" action="${action}">
       <div class="seg" role="radiogroup" aria-label="Day"><label><input type="radio" name="day" value="today" checked> Today</label><label><input type="radio" name="day" value="yesterday"> Yesterday</label></div>
-      <div class="kinds"><button class="pill" name="kind" value="gym">🏋️ Gym</button><button class="pill" name="kind" value="sport">🎾 Sport</button><button class="pill" name="kind" value="run">🏃 Run</button></div>
+      <div class="kinds"><button class="pill" name="kind" value="gym">Gym</button><button class="pill" name="kind" value="sport">Sport</button><button class="pill" name="kind" value="run">Run</button></div>
     </form>${list}
     <form method="post" action="/me/${esc(meToken)}/settings" class="inline">
-      <span class="muted wk-line">This week: ${g.thisWeek}${p.workout_target ? ` of ${p.workout_target}` : ""}${g.streak ? ` · 🔥 ${g.streak}-week streak` : ""}</span><span class="muted">Weekly goal</span>
+      <span class="muted">Weekly goal</span>
       <select name="workout_target" aria-label="Weekly goal">${p.workout_target ? "" : '<option value="" selected>–</option>'}${goal}</select><button class="pill" type="submit">Save</button>
-    </form></div>`;
+    </form></section>`;
 }
 
 /** Turn sugar tracking on or off and set the added-sugar limit. */
@@ -1107,9 +1231,9 @@ function sugarPanel(p: Player, meToken: string): string {
 
 export function lockedPage(next: string, error = ""): Response {
   return layout(
-    "Health Tracker",
+    "Health",
     `<header class="onboard">${MARK}<h1 class="title wordmark">Health</h1>
-      <p class="lede">Food, sleep, and wake-up.<br>Four points a day.</p></header>
+      <p class="lede">Food, sleep, and wake-up.<br>Four goals a day.</p></header>
     <form method="post" action="/unlock" class="card form">
       ${error ? `<p class="error" role="alert">${esc(error)}</p>` : ""}
       <input type="hidden" name="next" value="${esc(next)}">
