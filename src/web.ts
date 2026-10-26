@@ -399,7 +399,6 @@ main > section + section, main > section + .tiles2 { margin-top: 12px; }
 .tile2 .s { font-size: 12px; font-weight: 600; color: var(--muted); }
 .tile2 .ok { color: var(--series-1); }
 .tile2 .ok::before { content: none; }
-.macros { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; font-size: 13px; color: var(--muted); margin: 10px 6px 12px; }
 .sm { display: inline-block; box-sizing: border-box; width: 18px; height: 18px; border-radius: 5px; vertical-align: middle; }
 .s-hit { background: var(--series-1); }
 .s-near { border: 3px solid var(--critical); }
@@ -434,6 +433,20 @@ main > section + section, main > section + .tiles2 { margin-top: 12px; }
 .days .dp { width: auto; gap: 6px; }
 .days.one .dhead { grid-template-columns: 1fr auto; }
 .rate .rk + .rk { margin-top: 4px; }
+.nrows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 18px; margin: 0 2px; }
+@media (min-width: 640px) { .nrows { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.nhead { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.nk { font-size: 13px; font-weight: 600; }
+.nv { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.nv .muted { font-weight: 500; }
+.nbar { height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; margin: 6px 0 4px; }
+.nbar span { display: block; height: 100%; border-radius: 999px; background: var(--series-1); }
+.nbar span.warn { background: var(--critical); }
+.ns { font-size: 12px; color: var(--muted); }
+.ns.bad { color: var(--critical); font-weight: 600; }
+#nutrition form.inline { margin-top: 16px; }
+.wline { margin: 14px 2px 0; padding-top: 12px; border-top: 1px solid var(--grid); font-size: 14px; }
+.wline .k { font-size: 12px; color: var(--muted); margin-right: 4px; }
 `;
 
 const THEMES = `<div class="themes" role="group" aria-label="Theme">
@@ -583,7 +596,7 @@ function mealBlock(m: db.MealWithItems, sugar: boolean, tz: string): string {
   const t = mealTotals(m);
   const when = prettyTime(`${m.created_at.replace(" ", "T")}Z`, tz).toLowerCase().replace(" ", "");
   const item = (it: db.FoodEntry) =>
-    `<li>${esc(it.description)} <span class="muted">(${it.calories} cal, ${it.protein_g}g P, ${it.fat_g}g F, ${it.carbs_g}g C${sugar && it.sugar_g != null ? `, ${it.sugar_g}g sugar${it.added_sugar_g ? ` (${it.added_sugar_g}g added)` : ""}` : ""})</span></li>`;
+    `<li>${esc(it.description)} <span class="muted">(${it.calories} cal, ${it.protein_g}g P, ${it.fat_g}g F, ${it.carbs_g}g C${it.fiber_g != null ? `, ${it.fiber_g}g fiber` : ""}${sugar && it.sugar_g != null ? `, ${it.sugar_g}g sugar${it.added_sugar_g ? ` (${it.added_sugar_g}g added)` : ""}` : ""})</span></li>`;
   return `<div class="meal"><div class="meal-head"><div>${mealSlot(m.name, m.created_at, tz)} <span class="muted small">· ${when}</span></div><div class="tot">${fmt(t.calories)} cal · ${t.protein} g protein</div></div>
     <ul>${m.items.map(item).join("")}</ul></div>`;
 }
@@ -705,7 +718,7 @@ function rings(env: Env, p: Player, s: DayStats, day: string, today: string): st
   return `<section class="card rings"><svg viewBox="0 0 200 200" role="img" aria-label="${esc(label)}">${arcs}</svg><div class="rlegend">${legend}</div></section>`;
 }
 
-/** Big numbers for the four goals, then the unscored macros on one line. */
+/** Big numbers for the four goals. */
 function tiles(env: Env, p: Player, s: DayStats, day: string): string {
   const r = db.rules(env);
   const tile = (k: string, v: string, status: string) => `<div class="card tile2"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${status}</div></div>`;
@@ -744,12 +757,36 @@ function tiles(env: Env, p: Player, s: DayStats, day: string): string {
       !s.wakeAt ? "Not logged" : wakeGoalMet(day, s, r) ? done : `<span class="bad">${late} min late</span>`,
     ),
   );
-  const extras = [
-    p.fat_target != null ? `Fat ${s.fat} / ${p.fat_target} g` : `Fat ${s.fat} g`,
-    p.carb_target != null ? `Carbs ${s.carbs} / ~${p.carb_target} g` : `Carbs ${s.carbs} g`,
-    ...(p.sugar_target != null ? [s.sugar == null ? `Added sugar – / ${p.sugar_target} g` : `Added sugar ${s.addedSugar ?? 0} / ${p.sugar_target} g`] : []),
+  return `<section class="tiles2">${out.join("")}</section>`;
+}
+
+/** Fat, carbs, fiber, and sugar as bars against their targets. Shown, but not one of the four goals. */
+function nutrition(p: Player, s: DayStats, meToken: string): string {
+  const bar = (name: string, value: number | null, target: number | null, kind: "min" | "about" | "max", note = "") => {
+    const v = value ?? 0;
+    const pct = target ? Math.min(100, Math.round((v / target) * 100)) : 0;
+    const over = kind === "max" && target != null && v > target;
+    const of = target == null ? "" : `<span class="muted"> / ${kind === "about" ? "~" : ""}${target} g</span>`;
+    const st =
+      value == null ? "no estimates yet"
+      : target == null ? "no target"
+      : kind === "max" ? (over ? `${v - target} g over` : `${target - v} g left`)
+      : v >= target ? "done" : `${target - v} g to go`;
+    return `<div class="nrow"><div class="nhead"><span class="nk">${name}</span><span class="nv">${value == null ? "–" : `${v} g`}${of}</span></div>
+      <div class="nbar"><span class="${over ? "warn" : ""}" style="width:${target ? pct : 0}%"></span></div><div class="ns${over ? " bad" : ""}">${st}${note}</div></div>`;
+  };
+  const rows = [
+    bar("Fat", s.foodCount ? s.fat : null, p.fat_target, "min"),
+    bar("Carbs", s.foodCount ? s.carbs : null, p.carb_target, "about"),
+    bar("Fiber", s.fiber ?? null, p.fiber_target, "min"),
+    ...(p.sugar_target != null
+      ? [bar("Added sugar", s.sugar == null ? null : s.addedSugar ?? 0, p.sugar_target, "max", s.sugar == null ? "" : ` · ${s.sugar - (s.addedSugar ?? 0)} g natural`)]
+      : []),
   ];
-  return `<section class="tiles2">${out.join("")}</section><p class="macros">${extras.map((x) => `<span>${x}</span>`).join("")}</p>`;
+  const fiberForm = `<form method="post" action="/me/${esc(meToken)}/settings" class="inline"><span class="muted">Fiber goal</span>
+    <input type="number" name="fiber_target" min="5" max="100" value="${p.fiber_target ?? 25}" inputmode="numeric" aria-label="Fiber goal in grams"><span class="muted">g a day</span><button class="pill" type="submit">Save</button></form>`;
+  return `<section class="card" id="nutrition"><h3>Nutrition</h3><div class="nrows">${rows.join("")}</div>${fiberForm}
+    <p class="rules">Shown, not goals. Fiber: about 14 g per 1,000 calories, or 25 g a day for women and 38 g for men under 50.</p></section>`;
 }
 
 /** A row per goal, a square per day, and how many days it was hit. */
@@ -769,20 +806,26 @@ function weekGrid(w: WeekGoals, today: string): string {
   return `<div class="wgrid"><span></span>${heads}<span></span>${rows}</div>`;
 }
 
-function averagesCard(a: Averages): string {
+function averagesCard(a: Averages, p: Player, weights: { day: string; lb: number }[]): string {
   const cell = (k: string, v: string) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  const last = weights.at(-1);
+  const prev = last ? [...weights].reverse().find((w) => w.day <= addDays(last.day, -7)) : undefined;
+  const change = last && prev ? Math.round((last.lb - prev.lb) * 10) / 10 : null;
+  const weight = last
+    ? `<p class="wline"><span class="k">Weight</span> <b>${last.lb} lb</b> <span class="muted">on ${prettyDay(last.day).slice(4)}${change != null ? ` · ${change > 0 ? "+" : ""}${change} lb in a week` : ""}${p.goal_weight_lb != null ? ` · goal ${p.goal_weight_lb} lb` : ""}</span></p>`
+    : `<p class="wline muted">No weigh-ins yet. Text Poke your weight.</p>`;
   return `<section class="card"><h3>Last seven days</h3><div class="avgs">${[
     cell("Sleep", a.sleepMinutes == null ? "–" : prettyDuration(a.sleepMinutes)),
     cell("Up at", a.wakeMinutes == null ? "–" : prettyClock(a.wakeMinutes).replace(/ (AM|PM)/, "")),
     cell("Calories", a.calories == null ? "–" : fmt(a.calories)),
     cell("Protein", a.protein == null ? "–" : `${a.protein} g`),
-  ].join("")}</div></section>`;
+  ].join("")}</div>${weight}</section>`;
 }
 
 export async function homePage(env: Env, player: Player, meToken: string, now: Date): Promise<Response> {
   const today = gameDay(now, env.GAME_TZ);
   const start = weekStart(today);
-  const [s, week, streaks, avgs, gym, todayMeals, yMeals] = await Promise.all([
+  const [s, week, streaks, avgs, gym, todayMeals, yMeals, weights] = await Promise.all([
     dayStats(env, player.id, today),
     weekGoals(env, player, start, today),
     goalStreaks(env, player, today),
@@ -790,6 +833,7 @@ export async function homePage(env: Env, player: Player, meToken: string, now: D
     gymSummary(env, player, today),
     db.mealsForDay(env.DB, player.id, today),
     db.mealsForDay(env.DB, player.id, addDays(today, -1)),
+    db.weightsForPlayer(env.DB, player.id),
   ]);
   const r = db.rules(env);
   const notes = weekNotes(week, streaks, today);
@@ -802,10 +846,11 @@ export async function homePage(env: Env, player: Player, meToken: string, now: D
     <section class="intro"><div class="eyebrow">${FULL_DATE(today)}</div><p class="prose big">${esc(todaySentence(env, player, s, today))}</p></section>
     ${rings(env, player, s, today, today)}
     ${tiles(env, player, s, today)}
+    ${nutrition(player, s, meToken)}
     <section class="card tips"><div class="row"><h3>This week</h3><span class="muted small">${prettyDay(start).slice(4)} to ${prettyDay(addDays(start, 6)).slice(4)}</span></div>
       ${weekGrid(week, today)}${STATUS_KEY}<p class="tip-out" aria-live="polite"></p>
       ${notes ? `<p class="prose note">${esc(notes)}</p>` : ""}</section>
-    ${averagesCard(avgs)}
+    ${averagesCard(avgs, player, weights)}
     ${gymPanel(player, gym, meToken, today)}
     <h2>Today's food</h2><div class="card">${list(todayMeals, "Nothing logged yet today. Text Poke what you ate.")}</div>
     <h2>Yesterday</h2><div class="card">${list(yMeals, "Nothing logged yesterday.")}</div>
@@ -955,6 +1000,7 @@ function dayDetail(env: Env, p: Player, s: DayStats): string {
   const parts = [
     s.foodCount ? `${fmt(s.calories)} cal${s.unitemized ? " (includes a total with no foods, not counted)" : ""}` : "no food logged",
     ...(s.foodCount ? [`${s.protein}g protein`, `${s.fat}g fat`, `${s.carbs}g carbs`] : []),
+    ...(s.fiber != null ? [`${s.fiber}g fiber`] : []),
     ...(p.sugar_target != null && s.sugar != null ? [`${s.sugar}g sugar (${s.addedSugar ?? 0}g added)`] : []),
     s.sleepMinutes != null ? `${prettyDuration(s.sleepMinutes)} sleep` : "no sleep logged",
     s.wakeAt ? `up ${prettyTime(s.wakeAt, env.GAME_TZ)}` : "no wake-up logged",
@@ -1128,6 +1174,11 @@ function trends(env: Env, x: Series, days: string[], today: string, weights: { d
             goal: (p: Player) => (p.carb_target == null ? "not scored" : `about ${p.carb_target}g · not scored`),
             chart: (x: Series) =>
               barChart(bars(x, (s) => food(s, s.carbs), (s) => x.p.carb_target == null || Math.abs(s.carbs - x.p.carb_target) <= x.p.carb_target * 0.15, (_, v) => `${v}g carbs`), ACCENT, () => x.p.carb_target, { h, goal: { dir: "about", label: `${x.p.carb_target}g` } }),
+    },
+    {
+      title: "Fiber",
+      goal: (p: Player) => (p.fiber_target == null ? "no target" : `at least ${p.fiber_target}g`),
+      chart: (x: Series) => barChart(bars(x, (s) => s.fiber ?? null, (s) => x.p.fiber_target == null || (s.fiber ?? 0) >= x.p.fiber_target, (_, v) => `${v}g fiber`), ACCENT, () => x.p.fiber_target, { h, goal: { dir: "min", label: `${x.p.fiber_target}g` } }),
     },
     {
       title: "Sleep",

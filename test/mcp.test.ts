@@ -14,3 +14,12 @@ describe("parseSugarTag", () => {
     expect(parseSugarTag("2 eggs (scrambled)")).toEqual({ description: "2 eggs (scrambled)", sugar_g: null, added_sugar_g: null });
   });
 });
+
+describe("parseFiberTag", () => {
+  it("reads fiber and strips the tag, alongside a sugar tag", async () => {
+    const { parseFiberTag } = await import("../src/mcp");
+    expect(parseFiberTag("1 cup oatmeal [fiber 4g]")).toEqual({ description: "1 cup oatmeal", fiber_g: 4 });
+    expect(parseFiberTag("pear [sugar 17g, 0g added] (Fiber: 5.5 g)")).toEqual({ description: "pear [sugar 17g, 0g added]", fiber_g: 5.5 });
+    expect(parseFiberTag("2 eggs")).toEqual({ description: "2 eggs", fiber_g: null });
+  });
+});

@@ -12,7 +12,7 @@ GAME_TZ = "America/Los_Angeles"
 SLEEP_TARGET_HOURS = "7"
 # Wake-up point: up by this time (Sat/Sun use the weekend time), plus a grace period.
 WAKE_WEEKDAY = "08:30"
-WAKE_WEEKEND = "10:30"
+WAKE_WEEKEND = "09:30"
 WAKE_GRACE_MINUTES = "10"
 # School breaks: these weekdays use the weekend wake-up time. Comma-separated dates or from..to ranges.
 BREAK_DAYS = "2026-10-08..2026-10-09"

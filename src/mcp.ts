@@ -18,6 +18,7 @@ Each day has four goals: calories (cut: stay at or under; bulk: reach at least),
 - Sleep: any way of saying they're going to sleep ("gn", "going to bed", "night", "heading to sleep") means sleep_start. Any way of saying they woke up ("gm", "just woke up", "I'm up", "morning") means sleep_end. The wake-up time is a goal, so log it right away; if they say they got up earlier ("up since 8"), pass that time. A plain greeting like "hi" or "hey" is not a wake-up. But if get_status shows they're still in bed and it's morning, ask "Did you just wake up?" before logging, and use the time they confirm.
 - Log foods, not totals. If they only give a number ("I hit 3000 today"), ask what they ate. A calorie number with no foods is saved but doesn't count toward the calorie or protein goal.
 - Sugar: estimate sugar_g and added_sugar_g for every item, whether or not they track sugar. Added sugar is sugar put in during processing or cooking (sweets, soda, sweetened coffee drinks, flavored yogurt, granola, sauces, honey, syrup); sugar inside whole fruit, plain milk and plain yogurt is natural. Sugar isn't scored. When they ask to track it or change the limit ("track my sugar", "set my sugar limit to 21g"), call set_sugar_goal; to stop, call it with null.
+- Fiber: estimate fiber_g for every item too. It's shown with fat and carbs, not one of the four goals. When they ask for a fiber goal ("aim for 30g of fiber"), set_goal with fiber_target.
 - Workouts: when they say they went to the gym, worked out, lifted, played a sport, or went for a run ("hit legs", "just got back from the gym", "played tennis", "ran 3 miles"), call log_workout right away, once per session. Two separate sessions in a day (gym in the morning, a run at night) are two log_workout calls. Don't log the same session twice: "heading to the gym" then "back from the gym" is one workout (log it when they say they went or are back), and get_status shows what's already logged today. If they say they didn't actually go, or one was logged by mistake, remove_workout. Workouts aren't scored; they fill in a GitHub-style consistency grid. When they set a weekly goal ("I want to go 3 times a week"), set_workout_target.
 - Call get_status before answering questions about progress, and before editing or deleting so you have the right ids.
 - Reply like a text message: short, plain text, with their running totals vs goals after each log.`;
@@ -31,12 +32,13 @@ const ITEM_SCHEMA = {
     fat_g: { type: "number" },
     carbs_g: { type: "number" },
     sugar_g: { type: "number", description: "Total sugar, natural plus added." },
+    fiber_g: { type: "number", description: "Dietary fiber in grams. Use the label when known; whole grains, beans, fruit, vegetables, nuts and seeds have the most." },
     added_sugar_g: {
       type: "number",
       description: "The part of sugar_g that's added (table sugar, syrups, honey, juice concentrate, sweets, sweetened drinks and sauces). Sugar naturally in whole fruit, plain milk and plain yogurt is not added. Use the label's 'Includes Xg Added Sugars' when known.",
     },
   },
-  required: ["description", "calories", "protein_g", "fat_g", "carbs_g", "sugar_g", "added_sugar_g"],
+  required: ["description", "calories", "protein_g", "fat_g", "carbs_g", "sugar_g", "added_sugar_g", "fiber_g"],
 };
 
 function tools() {
@@ -120,6 +122,7 @@ Meals: leave meal_id null to start a new meal. Pass an existing meal_id (from ge
         protein_target: { type: "integer", description: "minimum grams" },
         fat_target: { type: ["integer", "null"], description: "minimum grams, shown but not scored" },
         carb_target: { type: ["integer", "null"], description: "rough daily aim in grams, shown but not scored" },
+        fiber_target: { type: ["integer", "null"], description: "daily fiber aim in grams, shown but not one of the goals" },
       },
       required: ["goal_type", "calorie_target", "protein_target"],
     },
@@ -205,6 +208,15 @@ export function parseSugarTag(description: string): { description: string; sugar
   };
 }
 
+const FIBER_TAG = /\s*[\[(]\s*fiber\s*:?\s*(\d+(?:\.\d+)?)\s*g?\s*[\])]/i;
+
+/** "1 cup oatmeal [fiber 4g]" -> the description without the tag, plus the grams. */
+export function parseFiberTag(description: string): { description: string; fiber_g: number | null } {
+  const m = description.match(FIBER_TAG);
+  if (!m) return { description, fiber_g: null };
+  return { description: description.replace(FIBER_TAG, "").trim(), fiber_g: Number(m[1]) };
+}
+
 function items(raw: unknown): FoodItem[] {
   if (!Array.isArray(raw) || raw.length === 0) throw new ToolError("items must be a non-empty list.");
   return raw.map((it) => {
@@ -218,13 +230,15 @@ function items(raw: unknown): FoodItem[] {
       const n = Number(it?.[k]);
       return it?.[k] == null || !Number.isFinite(n) || n < 0 ? null : n;
     };
-    // Agents with a tool list from before the sugar fields send sugar as a tag in the description instead.
-    const tag = parseSugarTag(it.description);
+    // Agents with a tool list from before the sugar and fiber fields send them as tags in the description instead.
+    const fiber = parseFiberTag(it.description);
+    const tag = parseSugarTag(fiber.description);
     return {
       description: tag.description.slice(0, 200),
       calories, protein_g, fat_g, carbs_g,
       sugar_g: opt("sugar_g") ?? tag.sugar_g,
       added_sugar_g: opt("added_sugar_g") ?? tag.added_sugar_g,
+      fiber_g: opt("fiber_g") ?? fiber.fiber_g,
     };
   });
 }
@@ -310,6 +324,7 @@ async function callTool(env: Env, player: Player, name: string, args: Args, now:
         throw new ToolError("goal_type must be cut or bulk, with positive calorie and protein targets.");
       }
       await db.setGoal(env.DB, player.id, goal);
+      if (args.fiber_target != null && Number(args.fiber_target) > 0) await db.setFiberTarget(env.DB, player.id, Math.round(Number(args.fiber_target)));
       return `Goal set: ${goalLine((await db.getPlayer(env.DB, player.id))!)}.`;
     }
 
@@ -393,6 +408,7 @@ async function agentNotes(env: Env, player: Player, tool: string, origin: string
   const notes = [
     `Workouts: if you don't have a log_workout tool, ${player.name} logs workouts with one tap on their page. When they mention a workout (gym, a sport, a run), reply with this link: ${page}#gym`,
   ];
+  notes.push(`Fiber: if your log_food items have no fiber_g field, add it to the item's description as a tag, e.g. "1 cup oatmeal [fiber 4g]". The app reads the tag and removes it from the name.`);
   if (player.sugar_target != null) {
     notes.push(`Sugar: ${player.name} tracks added vs natural sugar (limit ${player.sugar_target}g added). If your log_food items have no sugar_g field, ${TAG_HOW}.`);
   }

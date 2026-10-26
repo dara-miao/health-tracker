@@ -8,7 +8,7 @@ const env = {
 } as Env;
 const dara: Player = {
   id: 1, name: "Dara", poke_api_key: null, goal_type: "cut", calorie_target: 1700, protein_target: 120,
-  fat_target: 45, carb_target: 170, workout_target: 2, sugar_target: null, goal_weight_lb: 120, pending_bed_at: null,
+  fat_target: 45, carb_target: 170, workout_target: 2, sugar_target: null, fiber_target: null, goal_weight_lb: 120, pending_bed_at: null,
 };
 const stats = (calories: number) => ({ calories, protein: 50, fat: 20, carbs: 100, foodCount: 2, sleepMinutes: null, wakeAt: null });
 

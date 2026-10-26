@@ -63,6 +63,7 @@ export function goalLine(p: Player): string {
   const extras = [
     p.fat_target != null && `fat at least ${p.fat_target}g`,
     p.carb_target != null && `carbs about ${p.carb_target}g`,
+    p.fiber_target != null && `fiber at least ${p.fiber_target}g`,
     p.sugar_target != null && `added sugar at most ${p.sugar_target}g`,
   ].filter(Boolean);
   const unscored = extras.length ? `, ${extras.join(", ")} (not scored)` : "";
@@ -108,7 +109,8 @@ export function statusLines(env: Env, p: Player, s: DayStats, day: string, opts:
   }
   const fat = p.fat_target != null ? `${s.fat}g / ${p.fat_target}g fat${s.fat < p.fat_target ? " (low)" : ""}` : `${s.fat}g fat`;
   const carbs = p.carb_target != null ? `${s.carbs}g / ~${p.carb_target}g carbs` : `${s.carbs}g carbs`;
-  lines.push(`🥑 ${fat} · 🍞 ${carbs}`);
+  const fiber = s.fiber == null ? "" : p.fiber_target != null ? ` · 🌾 ${s.fiber}g / ${p.fiber_target}g fiber` : ` · 🌾 ${s.fiber}g fiber`;
+  lines.push(`🥑 ${fat} · 🍞 ${carbs}${fiber}`);
   if (p.sugar_target != null) lines.push(sugarLine(p, s));
   lines.push(
     s.sleepMinutes != null
@@ -418,6 +420,9 @@ export async function eveningNudge(env: Env, player: Player, day: string): Promi
   }
   if (player.sugar_target != null && (s.addedSugar ?? 0) > player.sugar_target) {
     lines.push(`Added sugar is over today (${s.addedSugar}g of ${player.sugar_target}g). Fruit or plain yogurt if you want something sweet; their sugar is natural.`);
+  }
+  if (player.fiber_target != null && s.fiber != null && s.fiber < player.fiber_target) {
+    lines.push(`Fiber is at ${s.fiber}g of ${player.fiber_target}g. Berries, beans, oats, or a pear would help.`);
   }
   if (player.carb_target != null && s.carbs < MIN_CARBS) {
     lines.push(`Carbs are low (${s.carbs}g; aim for about ${player.carb_target}g, and at least ${MIN_CARBS}g). Rice, oats, fruit, or potatoes would help.`);

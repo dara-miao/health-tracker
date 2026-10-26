@@ -49,7 +49,7 @@ Four goals a day. There are no points: each goal is **hit**, **close** (within 1
 | 🔥 Calories | at or under target (never under a 1,200 floor) | at or over target |
 | 💪 Protein | at or over target | at or over target |
 | 😴 Sleep | 7h or more | 7h or more |
-| ⏰ Wake-up | up by 8:30 weekdays, 10:30 weekends (10 min grace) | same |
+| ⏰ Wake-up | up by 8:30 weekdays, 9:30 weekends (10 min grace) | same |
 
 - The Today page leads with your day in a sentence, then four rings that fill toward each goal, the week as a grid of squares, per-goal streaks, and 7-day averages.
 - Food estimates aren't exact, so calories get 50 cal of grace past the target and protein 5g short of it (`CALORIE_GRACE`, `PROTEIN_GRACE_G`).
@@ -128,7 +128,7 @@ Tune the rules in `wrangler.toml`:
 | `OWNER_NAME` | `Dara` | the one player the app is for |
 | `GAME_TZ` | `America/Los_Angeles` | the time zone everything runs on |
 | `SLEEP_TARGET_HOURS` | `7` | hours needed for the sleep goal |
-| `WAKE_WEEKDAY` / `WAKE_WEEKEND` | `08:30` / `10:30` | the wake-up deadline |
+| `WAKE_WEEKDAY` / `WAKE_WEEKEND` | `08:30` / `09:30` | the wake-up deadline |
 | `WAKE_GRACE_MINUTES` | `10` | minutes of grace on the wake-up deadline |
 | `BREAK_DAYS` | | weekdays that use the weekend wake-up time |
 | `CUT_FLOOR_CALORIES` | `1200` | a cut day under this never hits the calorie goal |

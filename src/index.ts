@@ -109,6 +109,11 @@ async function handlePageAction(env: Env, player: Player, action: string, form: 
     if (n >= 1 && n <= 7) await db.setWorkoutTarget(env.DB, player.id, n);
     return "gym";
   }
+  if (form.has("fiber_target")) {
+    const n = Math.round(Number(field("fiber_target")));
+    if (n >= 5 && n <= 100) await db.setFiberTarget(env.DB, player.id, n);
+    return "nutrition";
+  }
   if (field("sugar") === "off") await db.setSugarTarget(env.DB, player.id, null);
   else if (form.has("sugar_target")) {
     const n = Math.round(Number(field("sugar_target")));
