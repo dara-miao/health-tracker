@@ -122,14 +122,14 @@ async function handlePageAction(env: Env, player: Player, action: string, form: 
   if (form.has("fiber_target")) {
     const n = Math.round(Number(field("fiber_target")));
     if (n >= 5 && n <= 100) await db.setFiberTarget(env.DB, player.id, n);
-    return "nutrition";
+    return "settings";
   }
   if (field("sugar") === "off") await db.setSugarTarget(env.DB, player.id, null);
   else if (form.has("sugar_target")) {
     const n = Math.round(Number(field("sugar_target")));
     if (n >= 1 && n <= 200) await db.setSugarTarget(env.DB, player.id, n);
   }
-  return "sugar";
+  return "settings";
 }
 
 function randomToken(bytes: number): string {

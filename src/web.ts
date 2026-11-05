@@ -443,7 +443,7 @@ main > section + section, main > section + .tiles2 { margin-top: 12px; }
 .nbar span.warn { background: var(--critical); }
 .ns { font-size: 12px; color: var(--muted); }
 .ns.bad { color: var(--critical); font-weight: 600; }
-#nutrition form.inline { margin-top: 16px; }
+#settings + .card form.inline:first-child { margin-top: 0; }
 .nrows { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media (min-width: 640px) { .nrows { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .gtag { margin-left: 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--series-1); }
@@ -747,7 +747,7 @@ function sleepTiles(env: Env, s: DayStats, day: string): string {
  * Every macro in one place: calories and protein (two of the goals), then fat, carbs, fiber, and
  * added sugar, each against its target. `final` = the day is over, so "to go" reads as "short".
  */
-function macros(env: Env, p: Player, s: DayStats, opts: { final: boolean; meToken?: string }): string {
+function macros(env: Env, p: Player, s: DayStats, opts: { final: boolean }): string {
   const r = db.rules(env);
   const row = (name: string, value: number | null, target: number | null, kind: "min" | "about" | "max", unit: string, opt: { goal?: boolean; note?: string; floor?: number } = {}) => {
     const v = value ?? 0;
@@ -778,13 +778,9 @@ function macros(env: Env, p: Player, s: DayStats, opts: { final: boolean; meToke
       ? [row("Added sugar", s.sugar == null ? null : s.addedSugar ?? 0, p.sugar_target, "max", "g", { note: s.sugar == null ? "" : ` · ${s.sugar - (s.addedSugar ?? 0)} g natural` })]
       : []),
   ];
-  const fiberForm = opts.meToken
-    ? `<form method="post" action="/me/${esc(opts.meToken)}/settings" class="inline"><span class="muted">Fiber goal</span>
-    <input type="number" name="fiber_target" min="5" max="100" value="${p.fiber_target ?? 25}" inputmode="numeric" aria-label="Fiber goal in grams"><span class="muted">g a day</span><button class="pill" type="submit">Save</button></form>`
-    : "";
   const unitemized = s.unitemized ? `<p class="rules bad">Includes a total with no foods, so calories and protein don't count toward the goals.</p>` : "";
-  return `<section class="card" id="nutrition"><h3>Macros</h3><div class="nrows">${rows.join("")}</div>${unitemized}${fiberForm}
-    <p class="rules">Calories and protein are goals; the rest are shown, not goals. Fiber: about 14 g per 1,000 calories, or 25 g a day for women and 38 g for men under 50.</p></section>`;
+  return `<section class="card" id="nutrition"><h3>Macros</h3><div class="nrows">${rows.join("")}</div>${unitemized}
+    <p class="rules">Calories and protein are goals; the rest are shown, not goals. Targets are in Settings at the bottom of Today.</p></section>`;
 }
 
 /** A row per goal, a square per day, and how many days it was hit. */
@@ -842,7 +838,7 @@ export async function homePage(env: Env, player: Player, meToken: string, now: D
     `${nav("today")}
     <section class="intro"><div class="eyebrow">${FULL_DATE(today)}</div><p class="prose big">${esc(todaySentence(env, player, s, today))}</p></section>
     ${rings(env, player, s, today, today)}
-    ${macros(env, player, s, { final: false, meToken })}
+    ${macros(env, player, s, { final: false })}
     ${sleepTiles(env, s, today)}
     <section class="card tips"><div class="row"><h3>This week</h3><span class="muted small">${prettyDay(start).slice(4)} to ${prettyDay(addDays(start, 6)).slice(4)}</span></div>
       ${weekGrid(week, today)}${STATUS_KEY}<p class="tip-out" aria-live="polite"></p>
@@ -851,7 +847,7 @@ export async function homePage(env: Env, player: Player, meToken: string, now: D
     ${gymPanel(player, gym, meToken, today)}
     <h2>Today's food</h2><div class="card">${list(todayMeals, "Nothing logged yet today. Text Poke what you ate.")}</div>
     <p class="rules"><a href="/yesterday">Yesterday's food and numbers →</a></p>
-    ${sugarPanel(player, meToken)}
+    ${settingsPanel(player, meToken)}
     <p class="rules">Goals: calories (${r.calorieGrace} cal of grace), protein (${r.proteinGrace} g of grace), ${shortDur(r.sleepTargetMinutes)}+ of sleep, and up by ${prettyClock(r.wakeWeekday)} on weekdays or ${prettyClock(r.wakeWeekend)} on weekends (${r.wakeGraceMinutes} min grace). Close means within 10% on food or 30 minutes on sleep and wake-up.</p>`,
     `${TIP_JS}<script>setTimeout(() => location.reload(), 5 * 60 * 1000)</script>`,
   );
@@ -1294,19 +1290,19 @@ function gymPanel(p: Player, g: GymSummary, meToken: string, today: string): str
 }
 
 /** Turn sugar tracking on or off and set the added-sugar limit. */
-function sugarPanel(p: Player, meToken: string): string {
+/** Targets you can change without Poke: the fiber goal and sugar tracking. */
+function settingsPanel(p: Player, meToken: string): string {
   const action = `/me/${esc(meToken)}/settings`;
-  const limit = (v: number) => `<input type="number" name="sugar_target" min="1" max="200" value="${v}" inputmode="numeric" aria-label="Added sugar limit in grams">`;
-  if (p.sugar_target != null) {
-    return `<h2 id="sugar">Sugar</h2><div class="card"><form method="post" action="${action}" class="inline">
-      <span class="muted">Added sugar limit</span>${limit(p.sugar_target)}<span class="muted">g a day</span><button class="pill" type="submit">Save</button>
-      <button class="pill" type="submit" name="sugar" value="off">Stop tracking</button></form>
-      <p class="rules">Not scored. 25g is the American Heart Association's limit for women, 36g for men.</p></div>`;
-  }
-  return `<h2 id="sugar">Sugar</h2><div class="card">
-    <p style="margin:0 0 10px">Track added (refined) vs natural sugar against a daily limit. It isn't scored.</p>
-    <form method="post" action="${action}" class="inline"><span class="muted">Added sugar limit</span>${limit(25)}<span class="muted">g</span><button class="pill" type="submit">Turn on</button></form>
-    <p class="rules">25g is the American Heart Association's limit for women, 36g for men.</p></div>`;
+  const num = (name: string, v: number, min: number, max: number, label: string) =>
+    `<input type="number" name="${name}" min="${min}" max="${max}" value="${v}" inputmode="numeric" aria-label="${label}">`;
+  const fiber = `<form method="post" action="${action}" class="inline"><span class="muted">Fiber goal</span>${num("fiber_target", p.fiber_target ?? 25, 5, 100, "Fiber goal in grams")}<span class="muted">g a day</span><button class="pill" type="submit">Save</button></form>`;
+  const sugar =
+    p.sugar_target != null
+      ? `<form method="post" action="${action}" class="inline"><span class="muted">Added sugar limit</span>${num("sugar_target", p.sugar_target, 1, 200, "Added sugar limit in grams")}<span class="muted">g a day</span><button class="pill" type="submit">Save</button>
+      <button class="pill" type="submit" name="sugar" value="off">Stop tracking</button></form>`
+      : `<form method="post" action="${action}" class="inline"><span class="muted">Track added sugar, limit</span>${num("sugar_target", 25, 1, 200, "Added sugar limit in grams")}<span class="muted">g</span><button class="pill" type="submit">Turn on</button></form>`;
+  return `<h2 id="settings">Settings</h2><div class="card">${fiber}${sugar}
+    <p class="rules">Fiber: about 14 g per 1,000 calories, or 25 g a day for women and 38 g for men under 50. Added sugar: the American Heart Association's limit is 25 g for women, 36 g for men.</p></div>`;
 }
 
 // ---------- password (once per phone) ----------
