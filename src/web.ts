@@ -2,7 +2,7 @@
 // small inline script from JSON embedded in the page.
 import * as db from "./db";
 import type { Env, Player } from "./db";
-import { GOAL_NAMES, dayStats, goalStreaks, gymSentence, gymSummary, lastWeekAverages, mealTotals, todaySentence, trackingStart, weekGoals, weekNotes, type Averages, type GymSummary, type WeekGoals } from "./game";
+import { GOAL_NAMES, daySentence, dayStats, goalStreaks, gymSentence, gymSummary, lastWeekAverages, mealTotals, todaySentence, trackingStart, weekGoals, weekNotes, type Averages, type GymSummary, type WeekGoals } from "./game";
 import { EMPTY_DAY, GOAL_KEYS, calorieGoalMet, dayStatus, proteinGoalMet, scoreDay, wakeGoalMet, wakeMinutes, wakeTarget, type DayStats, type GoalStatus } from "./scoring";
 import type { Workout } from "./gym";
 import { addDays, gameDay, localParts, prettyClock, prettyDay, prettyDuration, prettyTime, weekDays, weekdayOf, weekStart } from "./time";
@@ -434,7 +434,6 @@ main > section + section, main > section + .tiles2 { margin-top: 12px; }
 .days.one .dhead { grid-template-columns: 1fr auto; }
 .rate .rk + .rk { margin-top: 4px; }
 .nrows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 18px; margin: 0 2px; }
-@media (min-width: 640px) { .nrows { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .nhead { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
 .nk { font-size: 13px; font-weight: 600; }
 .nv { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -445,6 +444,12 @@ main > section + section, main > section + .tiles2 { margin-top: 12px; }
 .ns { font-size: 12px; color: var(--muted); }
 .ns.bad { color: var(--critical); font-weight: 600; }
 #nutrition form.inline { margin-top: 16px; }
+.nrows { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (min-width: 640px) { .nrows { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.gtag { margin-left: 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--series-1); }
+.tiles2.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.daynav { display: flex; justify-content: space-between; margin: 0 2px 14px; }
+.daynav .pill { text-decoration: none; padding: 10px 16px; }
 .wline { margin: 14px 2px 0; padding-top: 12px; border-top: 1px solid var(--grid); font-size: 14px; }
 .wline .k { font-size: 12px; color: var(--muted); margin-right: 4px; }
 `;
@@ -575,10 +580,11 @@ function layout(title: string, body: string, script = "", mainClass = ""): Respo
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
 
-function nav(current: "today" | "history"): string {
+function nav(current: "today" | "yesterday" | "history" | ""): string {
   const cur = (k: string) => (current === k ? 'aria-current="page"' : "");
   return `<nav><div class="brand">${THEMES}<h1>Health</h1></div><div class="links">
     <a href="/" ${cur("today")}>Today</a>
+    <a href="/yesterday" ${cur("yesterday")}>Yesterday</a>
     <a href="/history" ${cur("history")}>History</a></div></nav>`;
 }
 
@@ -718,75 +724,67 @@ function rings(env: Env, p: Player, s: DayStats, day: string, today: string): st
   return `<section class="card rings"><svg viewBox="0 0 200 200" role="img" aria-label="${esc(label)}">${arcs}</svg><div class="rlegend">${legend}</div></section>`;
 }
 
-/** Big numbers for the four goals. */
-function tiles(env: Env, p: Player, s: DayStats, day: string): string {
+/** Big numbers for sleep and wake-up. */
+function sleepTiles(env: Env, s: DayStats, day: string): string {
   const r = db.rules(env);
   const tile = (k: string, v: string, status: string) => `<div class="card tile2"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${status}</div></div>`;
-  const out: string[] = [];
   const done = '<span class="ok">Done</span>';
-  if (p.calorie_target != null && p.goal_type) {
-    const cut = p.goal_type === "cut";
-    const gap = Math.abs(p.calorie_target - s.calories);
-    let st = "Nothing logged";
-    if (s.unitemized) st = '<span class="bad">A total with no foods, not counted</span>';
-    else if (s.foodCount > 0) {
-      if (cut && s.calories > p.calorie_target) st = calorieGoalMet(p, s, r) ? `Within grace · ${fmt(gap)} over` : `<span class="bad">${fmt(gap)} over</span>`;
-      else if (cut) st = `${fmt(gap)} left`;
-      else st = calorieGoalMet(p, s, r) ? done : `${fmt(gap)} to go`;
-    }
-    out.push(tile(`Calories · ${cut ? "max" : "min"} ${fmt(p.calorie_target)}`, fmt(s.calories), st));
-  }
-  if (p.protein_target != null) {
-    const st = s.unitemized ? '<span class="bad">Not counted</span>' : proteinGoalMet(p, s, r) ? done : `${Math.max(0, p.protein_target - s.protein)} g to go`;
-    out.push(tile(`Protein · min ${p.protein_target} g`, `${s.protein}<small>g</small>`, st));
-  }
   const sleep = s.sleepMinutes;
-  out.push(
-    tile(
-      `Sleep · ${shortDur(r.sleepTargetMinutes)}+`,
-      sleep != null ? hm(sleep) : "–",
-      sleep == null ? "Not logged" : sleep >= r.sleepTargetMinutes ? done : `<span class="bad">${shortDur(r.sleepTargetMinutes - sleep)} short</span>`,
-    ),
-  );
   const target = wakeTarget(day, r);
   const late = s.wakeAt ? wakeMinutes(s.wakeAt, r.tz) - target : 0;
-  out.push(
-    tile(
-      `Up by ${prettyClock(target).replace(/ (AM|PM)/, "")}`,
-      s.wakeAt ? prettyTime(s.wakeAt, r.tz).replace(/ (AM|PM)/, (m) => `<small>${m.trim().toLowerCase()}</small>`) : "–",
-      !s.wakeAt ? "Not logged" : wakeGoalMet(day, s, r) ? done : `<span class="bad">${late} min late</span>`,
-    ),
-  );
-  return `<section class="tiles2">${out.join("")}</section>`;
+  return `<section class="tiles2 two">${tile(
+    `Sleep · ${shortDur(r.sleepTargetMinutes)}+`,
+    sleep != null ? hm(sleep) : "–",
+    sleep == null ? "Not logged" : sleep >= r.sleepTargetMinutes ? done : `<span class="bad">${shortDur(r.sleepTargetMinutes - sleep)} short</span>`,
+  )}${tile(
+    `Up by ${prettyClock(target).replace(/ (AM|PM)/, "")}`,
+    s.wakeAt ? prettyTime(s.wakeAt, r.tz).replace(/ (AM|PM)/, (m) => `<small>${m.trim().toLowerCase()}</small>`) : "–",
+    !s.wakeAt ? "Not logged" : wakeGoalMet(day, s, r) ? done : `<span class="bad">${late} min late</span>`,
+  )}</section>`;
 }
 
-/** Fat, carbs, fiber, and sugar as bars against their targets. Shown, but not one of the four goals. */
-function nutrition(p: Player, s: DayStats, meToken: string): string {
-  const bar = (name: string, value: number | null, target: number | null, kind: "min" | "about" | "max", note = "") => {
+/**
+ * Every macro in one place: calories and protein (two of the goals), then fat, carbs, fiber, and
+ * added sugar, each against its target. `final` = the day is over, so "to go" reads as "short".
+ */
+function macros(env: Env, p: Player, s: DayStats, opts: { final: boolean; meToken?: string }): string {
+  const r = db.rules(env);
+  const row = (name: string, value: number | null, target: number | null, kind: "min" | "about" | "max", unit: string, opt: { goal?: boolean; note?: string; floor?: number } = {}) => {
     const v = value ?? 0;
+    const u = unit === "cal" ? " cal" : " g";
+    const n = (x: number) => fmt(x) + u;
     const pct = target ? Math.min(100, Math.round((v / target) * 100)) : 0;
-    const over = kind === "max" && target != null && v > target;
-    const of = target == null ? "" : `<span class="muted"> / ${kind === "about" ? "~" : ""}${target} g</span>`;
-    const st =
-      value == null ? "no estimates yet"
+    const over = kind === "max" && target != null && v > target + (unit === "cal" ? r.calorieGrace ?? 0 : 0);
+    const of = target == null ? "" : `<span class="muted"> / ${kind === "about" ? "~" : ""}${fmt(target)}</span>`;
+    let st =
+      value == null ? (unit === "cal" || name === "Protein" ? "nothing logged" : "no estimates yet")
       : target == null ? "no target"
-      : kind === "max" ? (over ? `${v - target} g over` : `${target - v} g left`)
-      : v >= target ? "done" : `${target - v} g to go`;
-    return `<div class="nrow"><div class="nhead"><span class="nk">${name}</span><span class="nv">${value == null ? "–" : `${v} g`}${of}</span></div>
-      <div class="nbar"><span class="${over ? "warn" : ""}" style="width:${target ? pct : 0}%"></span></div><div class="ns${over ? " bad" : ""}">${st}${note}</div></div>`;
+      : kind === "max" ? (v > target ? `${n(v - target)} over` : opts.final ? `${n(target - v)} under` : `${n(target - v)} left`)
+      : v >= target ? "done" : opts.final ? `${n(target - v)} short` : `${n(target - v)} to go`;
+    if (opt.floor != null && value != null && v < opt.floor && (opts.final || v === 0)) st = `under the ${fmt(opt.floor)} floor`;
+    const goal = opt.goal ? '<span class="gtag">goal</span>' : "";
+    return `<div class="nrow"><div class="nhead"><span class="nk">${name}${goal}</span><span class="nv">${value == null ? "–" : fmt(v)}${of}<span class="muted">${unit === "cal" ? "" : " g"}</span></span></div>
+      <div class="nbar"><span class="${over ? "warn" : ""}" style="width:${target ? pct : 0}%"></span></div><div class="ns${over ? " bad" : ""}">${st}${opt.note ?? ""}</div></div>`;
   };
+  const fed = s.foodCount > 0;
+  const cut = p.goal_type === "cut";
   const rows = [
-    bar("Fat", s.foodCount ? s.fat : null, p.fat_target, "min"),
-    bar("Carbs", s.foodCount ? s.carbs : null, p.carb_target, "about"),
-    bar("Fiber", s.fiber ?? null, p.fiber_target, "min"),
+    row("Calories", fed ? s.calories : null, p.calorie_target, cut ? "max" : "min", "cal", { goal: true, floor: cut ? r.cutFloorCalories : undefined }),
+    row("Protein", fed ? s.protein : null, p.protein_target, "min", "g", { goal: true }),
+    row("Fat", fed ? s.fat : null, p.fat_target, "min", "g"),
+    row("Carbs", fed ? s.carbs : null, p.carb_target, "about", "g"),
+    row("Fiber", s.fiber ?? null, p.fiber_target, "min", "g"),
     ...(p.sugar_target != null
-      ? [bar("Added sugar", s.sugar == null ? null : s.addedSugar ?? 0, p.sugar_target, "max", s.sugar == null ? "" : ` · ${s.sugar - (s.addedSugar ?? 0)} g natural`)]
+      ? [row("Added sugar", s.sugar == null ? null : s.addedSugar ?? 0, p.sugar_target, "max", "g", { note: s.sugar == null ? "" : ` · ${s.sugar - (s.addedSugar ?? 0)} g natural` })]
       : []),
   ];
-  const fiberForm = `<form method="post" action="/me/${esc(meToken)}/settings" class="inline"><span class="muted">Fiber goal</span>
-    <input type="number" name="fiber_target" min="5" max="100" value="${p.fiber_target ?? 25}" inputmode="numeric" aria-label="Fiber goal in grams"><span class="muted">g a day</span><button class="pill" type="submit">Save</button></form>`;
-  return `<section class="card" id="nutrition"><h3>Nutrition</h3><div class="nrows">${rows.join("")}</div>${fiberForm}
-    <p class="rules">Shown, not goals. Fiber: about 14 g per 1,000 calories, or 25 g a day for women and 38 g for men under 50.</p></section>`;
+  const fiberForm = opts.meToken
+    ? `<form method="post" action="/me/${esc(opts.meToken)}/settings" class="inline"><span class="muted">Fiber goal</span>
+    <input type="number" name="fiber_target" min="5" max="100" value="${p.fiber_target ?? 25}" inputmode="numeric" aria-label="Fiber goal in grams"><span class="muted">g a day</span><button class="pill" type="submit">Save</button></form>`
+    : "";
+  const unitemized = s.unitemized ? `<p class="rules bad">Includes a total with no foods, so calories and protein don't count toward the goals.</p>` : "";
+  return `<section class="card" id="nutrition"><h3>Macros</h3><div class="nrows">${rows.join("")}</div>${unitemized}${fiberForm}
+    <p class="rules">Calories and protein are goals; the rest are shown, not goals. Fiber: about 14 g per 1,000 calories, or 25 g a day for women and 38 g for men under 50.</p></section>`;
 }
 
 /** A row per goal, a square per day, and how many days it was hit. */
@@ -825,14 +823,13 @@ function averagesCard(a: Averages, p: Player, weights: { day: string; lb: number
 export async function homePage(env: Env, player: Player, meToken: string, now: Date): Promise<Response> {
   const today = gameDay(now, env.GAME_TZ);
   const start = weekStart(today);
-  const [s, week, streaks, avgs, gym, todayMeals, yMeals, weights] = await Promise.all([
+  const [s, week, streaks, avgs, gym, todayMeals, weights] = await Promise.all([
     dayStats(env, player.id, today),
     weekGoals(env, player, start, today),
     goalStreaks(env, player, today),
     lastWeekAverages(env, player, today),
     gymSummary(env, player, today),
     db.mealsForDay(env.DB, player.id, today),
-    db.mealsForDay(env.DB, player.id, addDays(today, -1)),
     db.weightsForPlayer(env.DB, player.id),
   ]);
   const r = db.rules(env);
@@ -845,18 +842,52 @@ export async function homePage(env: Env, player: Player, meToken: string, now: D
     `${nav("today")}
     <section class="intro"><div class="eyebrow">${FULL_DATE(today)}</div><p class="prose big">${esc(todaySentence(env, player, s, today))}</p></section>
     ${rings(env, player, s, today, today)}
-    ${tiles(env, player, s, today)}
-    ${nutrition(player, s, meToken)}
+    ${macros(env, player, s, { final: false, meToken })}
+    ${sleepTiles(env, s, today)}
     <section class="card tips"><div class="row"><h3>This week</h3><span class="muted small">${prettyDay(start).slice(4)} to ${prettyDay(addDays(start, 6)).slice(4)}</span></div>
       ${weekGrid(week, today)}${STATUS_KEY}<p class="tip-out" aria-live="polite"></p>
       ${notes ? `<p class="prose note">${esc(notes)}</p>` : ""}</section>
     ${averagesCard(avgs, player, weights)}
     ${gymPanel(player, gym, meToken, today)}
     <h2>Today's food</h2><div class="card">${list(todayMeals, "Nothing logged yet today. Text Poke what you ate.")}</div>
-    <h2>Yesterday</h2><div class="card">${list(yMeals, "Nothing logged yesterday.")}</div>
+    <p class="rules"><a href="/yesterday">Yesterday's food and numbers →</a></p>
     ${sugarPanel(player, meToken)}
     <p class="rules">Goals: calories (${r.calorieGrace} cal of grace), protein (${r.proteinGrace} g of grace), ${shortDur(r.sleepTargetMinutes)}+ of sleep, and up by ${prettyClock(r.wakeWeekday)} on weekdays or ${prettyClock(r.wakeWeekend)} on weekends (${r.wakeGraceMinutes} min grace). Close means within 10% on food or 30 minutes on sleep and wake-up.</p>`,
     `${TIP_JS}<script>setTimeout(() => location.reload(), 5 * 60 * 1000)</script>`,
+  );
+}
+
+/** Any finished day: yesterday by default, with arrows to step back and forward. */
+export async function dayPage(env: Env, player: Player, day: string, now: Date): Promise<Response> {
+  const today = gameDay(now, env.GAME_TZ);
+  const yesterday = addDays(today, -1);
+  const [s, meals, workouts, weights] = await Promise.all([
+    dayStats(env, player.id, day),
+    db.mealsForDay(env.DB, player.id, day),
+    db.workoutsForPlayer(env.DB, player.id, day),
+    db.weightsForPlayer(env.DB, player.id),
+  ]);
+  const sugar = player.sugar_target != null;
+  const that = workouts.filter((w) => w.day === day);
+  const weighIn = weights.find((w) => w.day === day);
+  const href = (d: string) => (d === yesterday ? "/yesterday" : d === today ? "/" : `/day/${d}`);
+  const label = day === yesterday ? `Yesterday · ${FULL_DATE(day)}` : FULL_DATE(day);
+  const moved = `<div class="daynav"><a class="pill" href="${href(addDays(day, -1))}" aria-label="Previous day">← ${prettyDay(addDays(day, -1)).slice(0, 3)}</a>${
+    day < yesterday ? `<a class="pill" href="${href(addDays(day, 1))}" aria-label="Next day">${addDays(day, 1) === today ? "Today" : prettyDay(addDays(day, 1)).slice(0, 3)} →</a>` : `<a class="pill" href="/">Today →</a>`
+  }</div>`;
+  return layout(
+    day === yesterday ? "Yesterday" : prettyDay(day),
+    `${nav(day === yesterday ? "yesterday" : "")}
+    ${moved}
+    <section class="intro"><div class="eyebrow">${label}</div><p class="prose big">${esc(daySentence(env, player, s, day, true))}</p></section>
+    ${rings(env, player, s, day, today)}
+    ${macros(env, player, s, { final: true })}
+    ${sleepTiles(env, s, day)}
+    <h2>Food</h2><div class="card">${meals.length ? meals.map((m) => mealBlock(m, sugar, env.GAME_TZ)).join("") : '<p class="muted" style="margin:0">No food logged.</p>'}</div>
+    <h2>Workouts</h2><div class="card">${
+      that.length ? `<ul class="wlist">${that.map((w) => `<li>${KIND_LABEL[w.kind]}${w.note ? ` (${esc(w.note)})` : ""}</li>`).join("")}</ul>` : '<p class="muted" style="margin:0">Rest day.</p>'
+    }${weighIn ? `<p class="wline"><span class="k">Weight</span> <b>${weighIn.lb} lb</b></p>` : ""}</div>`,
+    TIP_JS,
   );
 }
 
@@ -1016,7 +1047,7 @@ function dayByDay(env: Env, { p, stat }: Series, days: string[], today: string):
     .map((d) => {
       const st = dayStatus(p, stat(d), r, d, today);
       const cells = GOAL_KEYS.map((k) => mark(st[k], `${GOAL_NAMES[k]}: ${ST_LABEL[st[k]]}`)).join("");
-      return `<details class="drow"><summary><span class="dd">${d === today ? "Today" : prettyDay(d)}${d === today ? ' <small class="muted">so far</small>' : ""}</span><span class="dp">${cells}</span></summary><div class="ddet"><p>${dayDetail(env, p, stat(d))}</p></div></details>`;
+      return `<details class="drow"><summary><span class="dd">${d === today ? "Today" : prettyDay(d)}${d === today ? ' <small class="muted">so far</small>' : ""}</span><span class="dp">${cells}</span></summary><div class="ddet"><p>${dayDetail(env, p, stat(d))}</p><p><a href="${d === today ? "/" : d === addDays(today, -1) ? "/yesterday" : `/day/${d}`}">Open ${d === today ? "today" : "this day"} →</a></p></div></details>`;
     })
     .join("");
   return `<div class="card days one"><div class="dhead"><span></span><span class="dp">${GOAL_KEYS.map((k) => `<span class="dl" title="${GOAL_NAMES[k]}">${GOAL_NAMES[k].slice(0, 3)}</span>`).join("")}</span></div>${rows}

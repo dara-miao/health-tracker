@@ -219,6 +219,11 @@ function gap(minutes: number): string {
 
 /** "You slept nine hours, 12:30 to 9:30, and were up an hour before the deadline. 460 calories left and 34 g of protein to go." */
 export function todaySentence(env: Env, p: Player, s: DayStats, day: string): string {
+  return daySentence(env, p, s, day, false);
+}
+
+/** The same line for any day. `final` = the day is over, so food reads as what you ate, not what's left. */
+export function daySentence(env: Env, p: Player, s: DayStats, day: string, final: boolean): string {
   const r = db.rules(env);
   const out: string[] = [];
   let wake = "";
@@ -237,10 +242,20 @@ export function todaySentence(env: Env, p: Player, s: DayStats, day: string): st
   } else if (s.wakeAt) {
     out.push(`You ${wake}, at ${clockOf(s.wakeAt, r.tz)}. No sleep logged.`);
   } else {
-    out.push("No sleep logged yet.");
+    out.push(final ? "No sleep logged." : "No sleep logged yet.");
   }
   if (s.foodCount === 0) {
-    out.push("Nothing eaten logged yet.");
+    out.push(final ? "No food logged." : "Nothing eaten logged yet.");
+  } else if (final && p.calorie_target != null && p.protein_target != null && p.goal_type) {
+    const t = p.calorie_target;
+    const cal =
+      p.goal_type === "cut"
+        ? s.calories > t ? `${fmt(s.calories)} calories, ${fmt(s.calories - t)} over the limit`
+        : s.calories < r.cutFloorCalories ? `${fmt(s.calories)} calories, under the ${fmt(r.cutFloorCalories)} floor`
+        : `${fmt(s.calories)} calories, ${fmt(t - s.calories)} under the limit`
+        : s.calories >= t ? `${fmt(s.calories)} calories, past your ${fmt(t)} goal` : `${fmt(s.calories)} calories, ${fmt(t - s.calories)} short`;
+    const short = p.protein_target - s.protein;
+    out.push(`You ate ${cal}, and ${s.protein} g of protein${short > 0 ? `, ${short} g short` : ""}.`);
   } else if (p.calorie_target != null && p.protein_target != null && p.goal_type) {
     const left = p.calorie_target - s.calories;
     const cal =

@@ -6,7 +6,7 @@ import { handleMcp } from "./mcp";
 import { sendToPoke } from "./poke";
 import { addDays, gameDay, localParts, weekStart } from "./time";
 import { ICON_PNG_180, ICON_PNG_512, ICON_PNG_64, ICON_SVG, MANIFEST } from "./icons";
-import { historyPage, homePage, joinPage, joinSuccess, lockedPage } from "./web";
+import { dayPage, historyPage, homePage, joinPage, joinSuccess, lockedPage } from "./web";
 
 const RECAP_HOUR = 10; // daily recap (and Monday's week summary) goes out at 10am
 const NUDGE_HOUR = 21; // evening check-in at 9pm
@@ -48,7 +48,8 @@ export default {
 
     if (path === "/unlock" && request.method === "POST") {
       const form = await request.formData();
-      const next = String(form.get("next")) === "/history" ? "/history" : "/";
+      const want = String(form.get("next"));
+      const next = /^\/(history|yesterday|day\/\d{4}-\d{2}-\d{2})$/.test(want) ? want : "/";
       const code = await joinCode(env);
       if (!code || String(form.get("code") ?? "").trim() !== code) {
         return redirect(next, setCookie(FLASH, { error: "That's not the password." }, 60, "/"));
@@ -56,7 +57,8 @@ export default {
       return redirect(next, `${GATE}=${await gateValue(code)}; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Lax`);
     }
 
-    if (path === "/" || path === "/history") {
+    const dayPath = path.match(/^\/day\/(\d{4}-\d{2}-\d{2})$/);
+    if (path === "/" || path === "/history" || path === "/yesterday" || dayPath) {
       // Password-protected: the join code, remembered on this phone for a year (or the private link, once opened).
       if (!(await unlocked(request, env))) {
         const flash = readCookie(request, FLASH);
@@ -67,6 +69,14 @@ export default {
       const owner = await db.owner(env);
       if (!owner) return Response.redirect(`${url.origin}/join`, 303);
       if (path === "/") return homePage(env, owner, await db.privateToken(env.DB, owner.id), new Date());
+      const today = gameDay(new Date(), env.GAME_TZ);
+      if (path === "/yesterday") return dayPage(env, owner, addDays(today, -1), new Date());
+      if (dayPath) {
+        const day = dayPath[1];
+        if (day >= today || Number.isNaN(Date.parse(day))) return Response.redirect(`${url.origin}/`, 303);
+        if (day === addDays(today, -1)) return Response.redirect(`${url.origin}/yesterday`, 303);
+        return dayPage(env, owner, day, new Date());
+      }
       return historyPage(env, owner, new Date(), url.searchParams.get("range"));
     }
     if (path === "/me") return Response.redirect(`${url.origin}/`, 303);
