@@ -2,7 +2,7 @@
 // small inline script from JSON embedded in the page.
 import * as db from "./db";
 import type { Env, Player } from "./db";
-import { GOAL_NAMES, daySentence, dayStats, goalStreaks, gymSentence, gymSummary, lastWeekAverages, mealTotals, todaySentence, trackingStart, weekGoals, weekNotes, type Averages, type GymSummary, type WeekGoals } from "./game";
+import { GOAL_NAMES, SODIUM_RISK_MG, daySentence, dayStats, goalStreaks, gymSentence, gymSummary, lastWeekAverages, mealTotals, todaySentence, trackingStart, weekGoals, weekNotes, type Averages, type GymSummary, type WeekGoals } from "./game";
 import { EMPTY_DAY, GOAL_KEYS, calorieGoalMet, dayStatus, proteinGoalMet, scoreDay, wakeGoalMet, wakeMinutes, wakeTarget, type DayStats, type GoalStatus } from "./scoring";
 import type { Workout } from "./gym";
 import { addDays, gameDay, localParts, prettyClock, prettyDay, prettyDuration, prettyTime, weekDays, weekdayOf, weekStart } from "./time";
@@ -598,11 +598,11 @@ export function mealSlot(name: string | null, createdAt: string, tz: string): st
   return h >= 4 && h < 11 ? "Breakfast" : h >= 11 && h < 15 ? "Lunch" : h >= 17 && h < 22 ? "Dinner" : "Snack";
 }
 
-function mealBlock(m: db.MealWithItems, sugar: boolean, tz: string): string {
+function mealBlock(m: db.MealWithItems, sugar: boolean, tz: string, sodium = false): string {
   const t = mealTotals(m);
   const when = prettyTime(`${m.created_at.replace(" ", "T")}Z`, tz).toLowerCase().replace(" ", "");
   const item = (it: db.FoodEntry) =>
-    `<li>${esc(it.description)} <span class="muted">(${it.calories} cal, ${it.protein_g}g P, ${it.fat_g}g F, ${it.carbs_g}g C${it.fiber_g != null ? `, ${it.fiber_g}g fiber` : ""}${sugar && it.sugar_g != null ? `, ${it.sugar_g}g sugar${it.added_sugar_g ? ` (${it.added_sugar_g}g added)` : ""}` : ""})</span></li>`;
+    `<li>${esc(it.description)} <span class="muted">(${it.calories} cal, ${it.protein_g}g P, ${it.fat_g}g F, ${it.carbs_g}g C${it.fiber_g != null ? `, ${it.fiber_g}g fiber` : ""}${sugar && it.sugar_g != null ? `, ${it.sugar_g}g sugar${it.added_sugar_g ? ` (${it.added_sugar_g}g added)` : ""}` : ""}${sodium && it.sodium_mg != null ? `, ${fmt(it.sodium_mg)}mg sodium` : ""})</span></li>`;
   return `<div class="meal"><div class="meal-head"><div>${mealSlot(m.name, m.created_at, tz)} <span class="muted small">· ${when}</span></div><div class="tot">${fmt(t.calories)} cal · ${t.protein} g protein</div></div>
     <ul>${m.items.map(item).join("")}</ul></div>`;
 }
@@ -751,7 +751,7 @@ function macros(env: Env, p: Player, s: DayStats, opts: { final: boolean }): str
   const r = db.rules(env);
   const row = (name: string, value: number | null, target: number | null, kind: "min" | "about" | "max", unit: string, opt: { goal?: boolean; note?: string; floor?: number } = {}) => {
     const v = value ?? 0;
-    const u = unit === "cal" ? " cal" : " g";
+    const u = unit === "cal" ? " cal" : unit === "mg" ? " mg" : " g";
     const n = (x: number) => fmt(x) + u;
     const pct = target ? Math.min(100, Math.round((v / target) * 100)) : 0;
     const over = kind === "max" && target != null && v > target + (unit === "cal" ? r.calorieGrace ?? 0 : 0);
@@ -763,7 +763,7 @@ function macros(env: Env, p: Player, s: DayStats, opts: { final: boolean }): str
       : v >= target ? "done" : opts.final ? `${n(target - v)} short` : `${n(target - v)} to go`;
     if (opt.floor != null && value != null && v < opt.floor && (opts.final || v === 0)) st = `under the ${fmt(opt.floor)} floor`;
     const goal = opt.goal ? '<span class="gtag">goal</span>' : "";
-    return `<div class="nrow"><div class="nhead"><span class="nk">${name}${goal}</span><span class="nv">${value == null ? "–" : fmt(v)}${of}<span class="muted">${unit === "cal" ? "" : " g"}</span></span></div>
+    return `<div class="nrow"><div class="nhead"><span class="nk">${name}${goal}</span><span class="nv">${value == null ? "–" : fmt(v)}${of}<span class="muted">${unit === "cal" ? "" : ` ${unit}`}</span></span></div>
       <div class="nbar"><span class="${over ? "warn" : ""}" style="width:${target ? pct : 0}%"></span></div><div class="ns${over ? " bad" : ""}">${st}${opt.note ?? ""}</div></div>`;
   };
   const fed = s.foodCount > 0;
@@ -776,6 +776,9 @@ function macros(env: Env, p: Player, s: DayStats, opts: { final: boolean }): str
     row("Fiber", s.fiber ?? null, p.fiber_target, "min", "g"),
     ...(p.sugar_target != null
       ? [row("Added sugar", s.sugar == null ? null : s.addedSugar ?? 0, p.sugar_target, "max", "g", { note: s.sugar == null ? "" : ` · ${s.sugar - (s.addedSugar ?? 0)} g natural` })]
+      : []),
+    ...(p.sodium_target != null
+      ? [row("Sodium", s.sodium ?? null, p.sodium_target, "max", "mg", { note: s.sodium != null && s.sodium > SODIUM_RISK_MG ? ` · past the ${fmt(SODIUM_RISK_MG)} mg risk line` : "" })]
       : []),
   ];
   const unitemized = s.unitemized ? `<p class="rules bad">Includes a total with no foods, so calories and protein don't count toward the goals.</p>` : "";
@@ -832,7 +835,7 @@ export async function homePage(env: Env, player: Player, meToken: string, now: D
   const notes = weekNotes(week, streaks, today);
   const sugar = player.sugar_target != null;
   const list = (ms: db.MealWithItems[], empty: string) =>
-    ms.length ? ms.map((m) => mealBlock(m, sugar, env.GAME_TZ)).join("") : `<p class="muted" style="margin:0">${empty}</p>`;
+    ms.length ? ms.map((m) => mealBlock(m, sugar, env.GAME_TZ, player.sodium_target != null)).join("") : `<p class="muted" style="margin:0">${empty}</p>`;
   return layout(
     "Health",
     `${nav("today")}
@@ -879,7 +882,7 @@ export async function dayPage(env: Env, player: Player, day: string, now: Date):
     ${rings(env, player, s, day, today)}
     ${macros(env, player, s, { final: true })}
     ${sleepTiles(env, s, day)}
-    <h2>Food</h2><div class="card">${meals.length ? meals.map((m) => mealBlock(m, sugar, env.GAME_TZ)).join("") : '<p class="muted" style="margin:0">No food logged.</p>'}</div>
+    <h2>Food</h2><div class="card">${meals.length ? meals.map((m) => mealBlock(m, sugar, env.GAME_TZ, player.sodium_target != null)).join("") : '<p class="muted" style="margin:0">No food logged.</p>'}</div>
     <h2>Workouts</h2><div class="card">${
       that.length ? `<ul class="wlist">${that.map((w) => `<li>${KIND_LABEL[w.kind]}${w.note ? ` (${esc(w.note)})` : ""}</li>`).join("")}</ul>` : '<p class="muted" style="margin:0">Rest day.</p>'
     }${weighIn ? `<p class="wline"><span class="k">Weight</span> <b>${weighIn.lb} lb</b></p>` : ""}</div>`,
@@ -1029,6 +1032,7 @@ function dayDetail(env: Env, p: Player, s: DayStats): string {
     ...(s.foodCount ? [`${s.protein}g protein`, `${s.fat}g fat`, `${s.carbs}g carbs`] : []),
     ...(s.fiber != null ? [`${s.fiber}g fiber`] : []),
     ...(p.sugar_target != null && s.sugar != null ? [`${s.sugar}g sugar (${s.addedSugar ?? 0}g added)`] : []),
+    ...(p.sodium_target != null && s.sodium != null ? [`${fmt(s.sodium)}mg sodium`] : []),
     s.sleepMinutes != null ? `${prettyDuration(s.sleepMinutes)} sleep` : "no sleep logged",
     s.wakeAt ? `up ${prettyTime(s.wakeAt, env.GAME_TZ)}` : "no wake-up logged",
   ];
@@ -1234,9 +1238,19 @@ function trends(env: Env, x: Series, days: string[], today: string, weights: { d
     })
     .join("");
   const sugar = x.p.sugar_target != null ? sugarCard(x, days, today, axis, h) : "";
+  const max = x.p.sodium_target;
+  const sodium =
+    max == null
+      ? ""
+      : `<div class="card tcard tips"><h3>Sodium</h3><div class="tcols n1"><div class="tcol" style="--gc:${ACCENT}"><div class="tlabel"><span class="muted">stay under ${fmt(max)} mg · not a goal</span></div>${barChart(
+          bars(x, (s) => s.sodium ?? null, (s) => (s.sodium ?? 0) <= max, (_, v) => `${fmt(v)} mg sodium${v > SODIUM_RISK_MG ? ` (past the ${fmt(SODIUM_RISK_MG)} mg risk line)` : v > max ? " (over)" : ""}`),
+          ACCENT,
+          () => max,
+          { h, goal: { dir: "max", label: `${fmt(max)} mg` } },
+        )}${axis}</div></div><p class="tip-out" aria-live="polite"></p></div>`;
   const weight = `<div class="card tcard tips"><h3>Weight</h3><div class="tcols n1"><div class="tcol"><div class="tlabel"><span class="muted">${x.p.goal_weight_lb != null ? `goal ${x.p.goal_weight_lb} lb` : "no goal weight"}</span></div>
     ${lineChart(days.map((d) => ({ day: d, value: weights.find((w) => w.day === d)?.lb ?? null })), ACCENT, x.p.goal_weight_lb)}${axis}</div></div><p class="tip-out" aria-live="polite"></p></div>`;
-  return `<div class="tgrid">${cards}${sugar}${weight}</div><p class="rules">Solid means the goal was hit, faded means missed. The dashed line is the goal, and the shaded side is where you want to be (≤ stay under, ≥ reach, a range means stay between the two lines). On wake-up, higher is earlier. Tap a bar or dot for the number.</p>`;
+  return `<div class="tgrid">${cards}${sugar}${sodium}${weight}</div><p class="rules">Solid means the goal was hit, faded means missed. The dashed line is the goal, and the shaded side is where you want to be (≤ stay under, ≥ reach, a range means stay between the two lines). On wake-up, higher is earlier. Tap a bar or dot for the number.</p>`;
 }
 
 /** Tap or hover anything with data-tip to show it in the nearest .tip-out line. */
@@ -1301,8 +1315,13 @@ function settingsPanel(p: Player, meToken: string): string {
       ? `<form method="post" action="${action}" class="inline"><span class="muted">Added sugar limit</span>${num("sugar_target", p.sugar_target, 1, 200, "Added sugar limit in grams")}<span class="muted">g a day</span><button class="pill" type="submit">Save</button>
       <button class="pill" type="submit" name="sugar" value="off">Stop tracking</button></form>`
       : `<form method="post" action="${action}" class="inline"><span class="muted">Track added sugar, limit</span>${num("sugar_target", 25, 1, 200, "Added sugar limit in grams")}<span class="muted">g</span><button class="pill" type="submit">Turn on</button></form>`;
-  return `<h2 id="settings">Settings</h2><div class="card">${fiber}${sugar}
-    <p class="rules">Fiber: about 14 g per 1,000 calories, or 25 g a day for women and 38 g for men under 50. Added sugar: the American Heart Association's limit is 25 g for women, 36 g for men.</p></div>`;
+  const sodium =
+    p.sodium_target != null
+      ? `<form method="post" action="${action}" class="inline"><span class="muted">Sodium limit</span>${num("sodium_target", p.sodium_target, 500, 10000, "Sodium limit in milligrams")}<span class="muted">mg a day</span><button class="pill" type="submit">Save</button>
+      <button class="pill" type="submit" name="sodium" value="off">Stop tracking</button></form>`
+      : `<form method="post" action="${action}" class="inline"><span class="muted">Track sodium, limit</span>${num("sodium_target", 1900, 500, 10000, "Sodium limit in milligrams")}<span class="muted">mg</span><button class="pill" type="submit">Turn on</button></form>`;
+  return `<h2 id="settings">Settings</h2><div class="card">${fiber}${sugar}${sodium}
+    <p class="rules">Fiber: about 14 g per 1,000 calories, or 25 g a day for women and 38 g for men under 50. Added sugar: the American Heart Association's limit is 25 g for women, 36 g for men. Sodium: the WHO's limit is 2,000 mg; 1,500 mg is ideal, and above 2,300 mg is the risk line to cut back from.</p></div>`;
 }
 
 // ---------- password (once per phone) ----------

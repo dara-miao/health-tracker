@@ -3,7 +3,7 @@
 // Any other key is refused.
 import * as db from "./db";
 import type { Env, FoodItem, Player } from "./db";
-import { UserError, dayStats, goToBed, goalLine, gymLine, gymSummary, logNight, mealTotals, statusReport, sugarLine, totalsLine, wakeUp } from "./game";
+import { UserError, dayStats, goToBed, goalLine, gymLine, gymSummary, logNight, mealTotals, sodiumLine, statusReport, sugarLine, totalsLine, wakeUp } from "./game";
 import { WORKOUT_KINDS, type WorkoutKind } from "./gym";
 import { addDays, formatOffset, gameDay, parseTime, prettyDay, utcOffsetMinutes } from "./time";
 
@@ -19,6 +19,7 @@ Each day has four goals: calories (cut: stay at or under; bulk: reach at least),
 - Log foods, not totals. If they only give a number ("I hit 3000 today"), ask what they ate. A calorie number with no foods is saved but doesn't count toward the calorie or protein goal.
 - Sugar: estimate sugar_g and added_sugar_g for every item, whether or not they track sugar. Added sugar is sugar put in during processing or cooking (sweets, soda, sweetened coffee drinks, flavored yogurt, granola, sauces, honey, syrup); sugar inside whole fruit, plain milk and plain yogurt is natural. Sugar isn't scored. When they ask to track it or change the limit ("track my sugar", "set my sugar limit to 21g"), call set_sugar_goal; to stop, call it with null.
 - Fiber: estimate fiber_g for every item too. It's shown with fat and carbs, not one of the four goals. When they ask for a fiber goal ("aim for 30g of fiber"), set_goal with fiber_target.
+- Sodium: estimate sodium_mg for every item too, whether or not they track it. Don't lowball restaurant food, sauces, soups, deli meat, bread, cheese (cottage cheese is high) and anything salted or cured; use the label or the chain's nutrition facts when known. Count salt and salty seasonings added while cooking or at the table (salt, seasoned salt and blends, Tajín, bouillon, soy sauce, hot sauce, seasoning packets) as their own item: 1/4 tsp of salt is about 575mg. Plain spices and salt-free blends (garlic or onion powder, pepper, paprika, cumin, chili flakes) have essentially none. If they track sodium and cooked something themselves without saying how they seasoned it, log a typical amount and ask which seasoning and roughly how much (this counts as the meal's one question if it's the biggest unknown). Sodium isn't one of the goals. When they ask to track it or change the limit ("track my sodium", "keep my sodium under 1900mg"), call set_sodium_goal; to stop, call it with null.
 - Workouts: when they say they went to the gym, worked out, lifted, played a sport, or went for a run ("hit legs", "just got back from the gym", "played tennis", "ran 3 miles"), call log_workout right away, once per session. Two separate sessions in a day (gym in the morning, a run at night) are two log_workout calls. Don't log the same session twice: "heading to the gym" then "back from the gym" is one workout (log it when they say they went or are back), and get_status shows what's already logged today. If they say they didn't actually go, or one was logged by mistake, remove_workout. Workouts aren't scored; they fill in a GitHub-style consistency grid. When they set a weekly goal ("I want to go 3 times a week"), set_workout_target.
 - Call get_status before answering questions about progress, and before editing or deleting so you have the right ids.
 - Reply like a text message: short, plain text, with their running totals vs goals after each log.`;
@@ -37,8 +38,9 @@ const ITEM_SCHEMA = {
       type: "number",
       description: "The part of sugar_g that's added (table sugar, syrups, honey, juice concentrate, sweets, sweetened drinks and sauces). Sugar naturally in whole fruit, plain milk and plain yogurt is not added. Use the label's 'Includes Xg Added Sugars' when known.",
     },
+    sodium_mg: { type: "number", description: "Sodium in milligrams, including salt and salty seasoning. Use the label or the restaurant's nutrition facts when known." },
   },
-  required: ["description", "calories", "protein_g", "fat_g", "carbs_g", "sugar_g", "added_sugar_g", "fiber_g"],
+  required: ["description", "calories", "protein_g", "fat_g", "carbs_g", "sugar_g", "added_sugar_g", "fiber_g", "sodium_mg"],
 };
 
 function tools() {
@@ -125,6 +127,15 @@ Meals: leave meal_id null to start a new meal. Pass an existing meal_id (from ge
         fiber_target: { type: ["integer", "null"], description: "daily fiber aim in grams, shown but not one of the goals" },
       },
       required: ["goal_type", "calorie_target", "protein_target"],
+    },
+  },
+  {
+    name: "set_sodium_goal",
+    description: "Turn on sodium tracking with a daily limit (not one of the goals), change the limit, or turn it off with null.",
+    inputSchema: {
+      type: "object",
+      properties: { max_mg: { type: ["integer", "null"], minimum: 500, maximum: 10000, description: "Max milligrams of sodium a day. Use 1,900 unless they name a number (under the WHO's 2,000; 1,500 is the ideal intake and 2,300 the risk line to stay under). Null turns tracking off." } },
+      required: ["max_mg"],
     },
   },
   {
@@ -217,6 +228,16 @@ export function parseFiberTag(description: string): { description: string; fiber
   return { description: description.replace(FIBER_TAG, "").trim(), fiber_g: Number(m[1]) };
 }
 
+const SODIUM_TAG = /\s*[\[(]\s*(?:sodium|na)\s*:?\s*(\d+(?:,\d{3})*(?:\.\d+)?)\s*(mg|g)?\s*(?:sodium)?\s*[\])]/i;
+
+/** "bowl of ramen [sodium 1800mg]" -> the description without the tag, plus the milligrams. */
+export function parseSodiumTag(description: string): { description: string; sodium_mg: number | null } {
+  const m = description.match(SODIUM_TAG);
+  if (!m) return { description, sodium_mg: null };
+  const n = Number(m[1].replace(/,/g, ""));
+  return { description: description.replace(SODIUM_TAG, "").trim(), sodium_mg: m[2]?.toLowerCase() === "g" ? n * 1000 : n };
+}
+
 function items(raw: unknown): FoodItem[] {
   if (!Array.isArray(raw) || raw.length === 0) throw new ToolError("items must be a non-empty list.");
   return raw.map((it) => {
@@ -231,7 +252,8 @@ function items(raw: unknown): FoodItem[] {
       return it?.[k] == null || !Number.isFinite(n) || n < 0 ? null : n;
     };
     // Agents with a tool list from before the sugar and fiber fields send them as tags in the description instead.
-    const fiber = parseFiberTag(it.description);
+    const na = parseSodiumTag(it.description);
+    const fiber = parseFiberTag(na.description);
     const tag = parseSugarTag(fiber.description);
     return {
       description: tag.description.slice(0, 200),
@@ -239,6 +261,7 @@ function items(raw: unknown): FoodItem[] {
       sugar_g: opt("sugar_g") ?? tag.sugar_g,
       added_sugar_g: opt("added_sugar_g") ?? tag.added_sugar_g,
       fiber_g: opt("fiber_g") ?? fiber.fiber_g,
+      sodium_mg: opt("sodium_mg") ?? na.sodium_mg,
     };
   });
 }
@@ -275,6 +298,7 @@ async function callTool(env: Env, player: Player, name: string, args: Args, now:
         `  Added: ${t.calories} cal, ${t.protein}g protein, ${t.fat}g fat, ${t.carbs}g carbs`,
         await totalsLine(env, player, day),
         missingSugar(player, added),
+        missingSodium(player, added),
         unitemizedNote(player, added),
       ].filter(Boolean).join("\n");
     }
@@ -287,6 +311,7 @@ async function callTool(env: Env, player: Player, name: string, args: Args, now:
         `Updated item ${updated.id}: ${updated.description}: ${updated.calories} cal, ${updated.protein_g}g P, ${updated.fat_g}g F, ${updated.carbs_g}g C`,
         await totalsLine(env, player, updated.day),
         missingSugar(player, [updated]),
+        missingSodium(player, [updated]),
         unitemizedNote(player, [updated]),
       ].filter(Boolean).join("\n");
     }
@@ -357,6 +382,16 @@ async function callTool(env: Env, player: Player, name: string, args: Args, now:
       return `${verb} ${prettyDay(day)}. ${gymLine(player, await gymSummary(env, player, today))}.`;
     }
 
+    case "set_sodium_goal": {
+      const raw = args.max_mg;
+      const n = raw == null ? null : Math.round(Number(raw));
+      if (n != null && !(n >= 500 && n <= 10000)) throw new ToolError("max_mg must be 500 to 10,000 mg, or null to stop tracking.");
+      await db.setSodiumTarget(env.DB, player.id, n);
+      if (n == null) return "Sodium tracking is off. Sodium estimates are still saved in case they turn it back on.";
+      const p = (await db.getPlayer(env.DB, player.id))!;
+      return `Sodium tracking on: at most ${n.toLocaleString()}mg a day (not one of the goals). It shows in Macros on their page.\n${sodiumLine(p, await dayStats(env, p.id, today))}`;
+    }
+
     case "set_sugar_goal": {
       const raw = args.added_max_g;
       const n = raw == null ? null : Math.round(Number(raw));
@@ -397,6 +432,16 @@ function missingSugar(player: Player, saved: { id: number; sugar_g: number | nul
   return `Missing sugar on item${ids.length > 1 ? "s" : ""} ${ids.join(", ")}: ${player.name} tracks sugar. Re-save ${ids.length > 1 ? "each" : "it"} with edit_food (same numbers) and ${TAG_HOW}. Do this from now on for every item you log for them.`;
 }
 
+const SODIUM_TAG_HOW = `put it in the item's description as a tag, e.g. "1 bowl tonkotsu ramen [sodium 1800mg]". The app reads the tag and removes it from the name`;
+
+/** If a sodium tracker's items came in without sodium, ask the agent to re-save them with the tag. */
+function missingSodium(player: Player, saved: { id: number; sodium_mg: number | null }[]): string {
+  if (player.sodium_target == null) return "";
+  const ids = saved.filter((e) => e.sodium_mg == null).map((e) => e.id);
+  if (!ids.length) return "";
+  return `Missing sodium on item${ids.length > 1 ? "s" : ""} ${ids.join(", ")}: ${player.name} tracks sodium. Re-save ${ids.length > 1 ? "each" : "it"} with edit_food (same numbers) and ${SODIUM_TAG_HOW}. Do this from now on for every item you log for them.`;
+}
+
 /**
  * Notes for the agent about features its saved tool list may not include, so nobody has to reconnect
  * the integration. Shown on get_status, and on the first other tool call each day.
@@ -411,6 +456,9 @@ async function agentNotes(env: Env, player: Player, tool: string, origin: string
   notes.push(`Fiber: if your log_food items have no fiber_g field, add it to the item's description as a tag, e.g. "1 cup oatmeal [fiber 4g]". The app reads the tag and removes it from the name.`);
   if (player.sugar_target != null) {
     notes.push(`Sugar: ${player.name} tracks added vs natural sugar (limit ${player.sugar_target}g added). If your log_food items have no sugar_g field, ${TAG_HOW}.`);
+  }
+  if (player.sodium_target != null) {
+    notes.push(`Sodium: ${player.name} tracks sodium (limit ${player.sodium_target.toLocaleString()}mg). If your log_food items have no sodium_mg field, ${SODIUM_TAG_HOW}. Count salt and salty seasonings added while cooking or at the table (salt, seasoned salt and blends, Tajín, bouillon, soy sauce, hot sauce, seasoning packets) as their own item: 1/4 tsp of salt is about 575mg. Plain spices and salt-free blends (garlic or onion powder, pepper, paprika, cumin, chili flakes) have essentially none. Ask what they seasoned home-cooked food with if they didn't say. If you don't have a set_sodium_goal tool, they change the limit on their page: ${page}#settings`);
   }
   return `\n\nNotes for you (the agent), not for them:\n${notes.map((n) => `- ${n}`).join("\n")}`;
 }

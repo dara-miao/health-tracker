@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { goalLine, statusLines, sugarLine, wakeLine } from "../src/game";
+import { goalLine, sodiumLine, statusLines, sugarLine, wakeLine } from "../src/game";
 import type { Env, Player } from "../src/db";
 
 const env = {
@@ -8,7 +8,7 @@ const env = {
 } as Env;
 const dara: Player = {
   id: 1, name: "Dara", poke_api_key: null, goal_type: "cut", calorie_target: 1700, protein_target: 120,
-  fat_target: 45, carb_target: 170, workout_target: 2, sugar_target: null, fiber_target: null, goal_weight_lb: 120, pending_bed_at: null,
+  fat_target: 45, carb_target: 170, workout_target: 2, sugar_target: null, fiber_target: null, sodium_target: null, goal_weight_lb: 120, pending_bed_at: null,
 };
 const stats = (calories: number) => ({ calories, protein: 50, fat: 20, carbs: 100, foodCount: 2, sleepMinutes: null, wakeAt: null });
 
@@ -45,5 +45,21 @@ describe("sugar", () => {
     expect(statusLines(env, dara, s, "2026-09-30").join("\n")).not.toMatch(/sugar/);
     expect(statusLines(env, tracking, s, "2026-09-30").join("\n")).toMatch(/5g added/);
     expect(goalLine(tracking)).toMatch(/added sugar at most 25g/);
+  });
+});
+
+describe("sodium", () => {
+  const tracking = { ...dara, sodium_target: 1900 };
+  it("shows the total against the limit, and flags the 2,300mg risk line separately", () => {
+    expect(sodiumLine(tracking, { ...stats(1500), sodium: 1200 })).toBe("🧂 1,200mg / 1,900mg sodium");
+    expect(sodiumLine(tracking, { ...stats(1500), sodium: 2100 })).toBe("🧂 2,100mg / 1,900mg sodium (over)");
+    expect(sodiumLine(tracking, { ...stats(1500), sodium: 2650 })).toBe("🧂 2,650mg / 1,900mg sodium (over, past the 2,300mg risk line)");
+    expect(sodiumLine(tracking, stats(1500))).toBe("🧂 no sodium estimates yet today (max 1,900mg)");
+  });
+  it("only shows when tracking", () => {
+    const s = { ...stats(1500), sodium: 900 };
+    expect(statusLines(env, dara, s, "2026-09-30").join("\n")).not.toMatch(/sodium/);
+    expect(statusLines(env, tracking, s, "2026-09-30").join("\n")).toMatch(/900mg \/ 1,900mg sodium/);
+    expect(goalLine(tracking)).toMatch(/sodium at most 1,900mg/);
   });
 });
