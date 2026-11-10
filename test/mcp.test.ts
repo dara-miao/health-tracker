@@ -23,3 +23,13 @@ describe("parseFiberTag", () => {
     expect(parseFiberTag("2 eggs")).toEqual({ description: "2 eggs", fiber_g: null });
   });
 });
+
+describe("parseSodiumTag", () => {
+  it("reads milligrams and strips the tag", async () => {
+    const { parseSodiumTag } = await import("../src/mcp");
+    expect(parseSodiumTag("1 bowl tonkotsu ramen [sodium 1800mg]")).toEqual({ description: "1 bowl tonkotsu ramen", sodium_mg: 1800 });
+    expect(parseSodiumTag("deli turkey (sodium: 1,020 mg)")).toEqual({ description: "deli turkey", sodium_mg: 1020 });
+    expect(parseSodiumTag("pretzels [Na 1.2g]")).toEqual({ description: "pretzels", sodium_mg: 1200 });
+    expect(parseSodiumTag("2 eggs (scrambled)")).toEqual({ description: "2 eggs (scrambled)", sodium_mg: null });
+  });
+});

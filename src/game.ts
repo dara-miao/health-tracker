@@ -65,6 +65,7 @@ export function goalLine(p: Player): string {
     p.carb_target != null && `carbs about ${p.carb_target}g`,
     p.fiber_target != null && `fiber at least ${p.fiber_target}g`,
     p.sugar_target != null && `added sugar at most ${p.sugar_target}g`,
+    p.sodium_target != null && `sodium at most ${p.sodium_target.toLocaleString()}mg`,
   ].filter(Boolean);
   const unscored = extras.length ? `, ${extras.join(", ")} (not scored)` : "";
   return `${p.goal_type}: ${cmp} ${p.calorie_target.toLocaleString()} cal, protein at least ${p.protein_target}g${unscored}`;
@@ -112,6 +113,7 @@ export function statusLines(env: Env, p: Player, s: DayStats, day: string, opts:
   const fiber = s.fiber == null ? "" : p.fiber_target != null ? ` · 🌾 ${s.fiber}g / ${p.fiber_target}g fiber` : ` · 🌾 ${s.fiber}g fiber`;
   lines.push(`🥑 ${fat} · 🍞 ${carbs}${fiber}`);
   if (p.sugar_target != null) lines.push(sugarLine(p, s));
+  if (p.sodium_target != null) lines.push(sodiumLine(p, s));
   lines.push(
     s.sleepMinutes != null
       ? `😴 ${prettyDuration(s.sleepMinutes)} sleep ${sleepGoalMet(s, r) ? "✅" : "❌"}`
@@ -392,6 +394,18 @@ export function gymLine(p: Player, g: GymSummary): string {
 }
 
 /** Total sugar and the added part against the limit. */
+/** The National Academies' chronic disease risk line for sodium (ages 14+): above this, cut back. */
+export const SODIUM_RISK_MG = 2300;
+
+/** Sodium against the daily limit, with a separate flag past the risk line. */
+export function sodiumLine(p: Player, s: DayStats): string {
+  const max = (p.sodium_target ?? 0).toLocaleString();
+  if (s.sodium == null) return `🧂 no sodium estimates yet today (max ${max}mg)`;
+  const over = p.sodium_target != null && s.sodium > p.sodium_target;
+  const risk = s.sodium > SODIUM_RISK_MG ? `, past the ${SODIUM_RISK_MG.toLocaleString()}mg risk line` : "";
+  return `🧂 ${s.sodium.toLocaleString()}mg / ${max}mg sodium${over ? ` (over${risk})` : ""}`;
+}
+
 export function sugarLine(p: Player, s: DayStats): string {
   if (s.sugar == null) return `🍬 no sugar estimates yet today (added sugar max ${p.sugar_target}g)`;
   const added = s.addedSugar ?? 0;
@@ -435,6 +449,9 @@ export async function eveningNudge(env: Env, player: Player, day: string): Promi
   }
   if (player.sugar_target != null && (s.addedSugar ?? 0) > player.sugar_target) {
     lines.push(`Added sugar is over today (${s.addedSugar}g of ${player.sugar_target}g). Fruit or plain yogurt if you want something sweet; their sugar is natural.`);
+  }
+  if (player.sodium_target != null && (s.sodium ?? 0) > player.sodium_target) {
+    lines.push(`Sodium is over today (${s.sodium!.toLocaleString()}mg of ${player.sodium_target.toLocaleString()}mg). Drink extra water, and go easy on salty seasoning, sauces, deli meat, and chips tonight.`);
   }
   if (player.fiber_target != null && s.fiber != null && s.fiber < player.fiber_target) {
     lines.push(`Fiber is at ${s.fiber}g of ${player.fiber_target}g. Berries, beans, oats, or a pear would help.`);

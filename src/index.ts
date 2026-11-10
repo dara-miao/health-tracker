@@ -124,6 +124,15 @@ async function handlePageAction(env: Env, player: Player, action: string, form: 
     if (n >= 5 && n <= 100) await db.setFiberTarget(env.DB, player.id, n);
     return "settings";
   }
+  if (field("sodium") === "off") {
+    await db.setSodiumTarget(env.DB, player.id, null);
+    return "settings";
+  }
+  if (form.has("sodium_target")) {
+    const n = Math.round(Number(field("sodium_target")));
+    if (n >= 500 && n <= 10000) await db.setSodiumTarget(env.DB, player.id, n);
+    return "settings";
+  }
   if (field("sugar") === "off") await db.setSugarTarget(env.DB, player.id, null);
   else if (form.has("sugar_target")) {
     const n = Math.round(Number(field("sugar_target")));
