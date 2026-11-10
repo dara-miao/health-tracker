@@ -32,7 +32,7 @@ describe("patterns", () => {
     food(day(n), "1/4 tsp seasoned salt", 400, 0),
   ]);
   const days = [1, 2, 3, 4, 5, 6, 7].map(() => ({ calories: 1400, protein: 115, fat: 40, carbs: 100, foodCount: 5, fiber: 6, iron: 2, sodium: 1830 + 400, addedSugar: 5, water: 60, sleepMinutes: null, wakeAt: null }));
-  const out = patterns(me, days, foods);
+  const { notes: out, swaps } = patterns(me, days, foods);
 
   it("leads with what's furthest off, and names their own foods", () => {
     expect(out).toHaveLength(3);
@@ -42,10 +42,23 @@ describe("patterns", () => {
     expect(out.join(" ")).toMatch(/same 5 foods/);
   });
   it("names the biggest sodium sources with a swap", () => {
-    const sodium = patterns({ ...me, iron_target: null, fiber_target: null }, days, foods).find((t) => t.startsWith("Sodium"))!;
+    const sodium = patterns({ ...me, iron_target: null, fiber_target: null }, days, foods).notes.find((t) => t.startsWith("Sodium"))!;
     expect(sodium).toMatch(/Most of it is from cottage cheese and salty seasoning\. Try low-sodium or no-salt-added cottage cheese instead of regular cottage cheese/);
   });
+  it("names concrete grocery swaps for their staples, aimed at what's low", () => {
+    expect(swaps).toHaveLength(3);
+    expect(swaps).toContainEqual({ from: "cottage cheese", to: "edamame", why: "more iron and more fiber" });
+    expect(swaps).toContainEqual({ from: "protein shakes", to: "Cream of Wheat made with water, protein powder stirred in", why: "more iron" });
+    expect(swaps.map((x) => x.from)).toContain("tuna");
+  });
+  it("picks the swap for the gap that's actually there", () => {
+    // Only sodium is off: cottage cheese should go low-sodium, not edamame.
+    const salty = days.map((d) => ({ ...d, iron: 20, fiber: 30, fat: 50 }));
+    const s = patterns(me, salty, foods).swaps;
+    expect(s).toContainEqual({ from: "salty seasoning", to: "salt-free seasoning blends", why: "less sodium" });
+    expect(s).toContainEqual({ from: "cottage cheese", to: "low-sodium cottage cheese", why: "less sodium" });
+  });
   it("says nothing until there are a few days of food", () => {
-    expect(patterns(me, days.slice(0, 2), foods)).toEqual([]);
+    expect(patterns(me, days.slice(0, 2), foods)).toEqual({ notes: [], swaps: [] });
   });
 });

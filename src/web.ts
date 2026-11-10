@@ -5,6 +5,7 @@ import type { Env, Player } from "./db";
 import { GOAL_NAMES, SODIUM_RISK_MG, daySentence, recentPatterns, dayStats, goalStreaks, gymSentence, gymSummary, lastWeekAverages, mealTotals, todaySentence, trackingStart, weekGoals, weekNotes, type Averages, type GymSummary, type WeekGoals } from "./game";
 import { EMPTY_DAY, GOAL_KEYS, calorieGoalMet, dayStatus, proteinGoalMet, scoreDay, wakeGoalMet, wakeMinutes, wakeTarget, type DayStats, type GoalStatus } from "./scoring";
 import type { Workout } from "./gym";
+import type { Patterns } from "./patterns";
 import { addDays, gameDay, localParts, prettyClock, prettyDay, prettyDuration, prettyTime, weekDays, weekdayOf, weekStart } from "./time";
 
 const FULL_DATE = (day: string) => {
@@ -382,6 +383,10 @@ main > section + section, main > section + .tiles2 { margin-top: 12px; }
 .prose { font-family: var(--serif); color: var(--ink); margin: 0; }
 .prose.big { font-size: 24px; line-height: 1.36; max-width: 36ch; }
 .prose.pat { font-size: 18px; line-height: 1.45; margin-top: 12px; }
+.swap-h { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--grid); font-size: 13px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-2); }
+.swaps { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.swaps li { line-height: 1.4; }
+.swaps .arrow { color: var(--ink-2); margin: 0 2px; }
 .prose.pat + .prose.pat { padding-top: 12px; border-top: 1px solid var(--grid); }
 .prose.note { font-size: 18px; line-height: 1.45; color: var(--ink-2); margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--grid); }
 .card.rings { display: flex; align-items: center; gap: 20px; padding: 18px; }
@@ -430,6 +435,10 @@ main > section + section, main > section + .tiles2 { margin-top: 12px; }
 .wbar.on2 { background: var(--series-1); }
 .wbar.future { background: transparent; box-shadow: inset 0 0 0 1px var(--grid); }
 .gym-log .prose.pat { font-size: 18px; line-height: 1.45; margin-top: 12px; }
+.swap-h { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--grid); font-size: 13px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-2); }
+.swaps { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.swaps li { line-height: 1.4; }
+.swaps .arrow { color: var(--ink-2); margin: 0 2px; }
 .prose.pat + .prose.pat { padding-top: 12px; border-top: 1px solid var(--grid); }
 .prose.note { margin-bottom: 14px; }
 .meal-head .tot { margin: 0; font-weight: 500; }
@@ -791,12 +800,17 @@ function macros(env: Env, p: Player, s: DayStats, opts: { final: boolean }): str
     <p class="rules">Calories and protein are goals; the rest are shown, not goals. Targets are in Settings at the bottom of Today.</p></section>`;
 }
 
-/** What's been running low or high lately, and what to eat about it. */
-function patternsCard(items: string[]): string {
-  const body = items.length
-    ? items.map((t) => `<p class="prose pat">${esc(t)}</p>`).join("")
+/** What's been running low or high lately, and the grocery swaps that would fix it. */
+function patternsCard(pat: Patterns): string {
+  const notes = pat.notes.length
+    ? pat.notes.map((t) => `<p class="prose pat">${esc(t)}</p>`).join("")
     : `<p class="prose pat muted">Nothing stands out from the last week. Once a few days are logged, this notices what's running low or high and what to eat about it.</p>`;
-  return `<section class="card" id="patterns"><div class="row"><h3>Patterns</h3><span class="muted small">last 7 days</span></div>${body}</section>`;
+  const swaps = pat.swaps.length
+    ? `<h4 class="swap-h">Next grocery run</h4><ul class="swaps">${pat.swaps
+        .map((x) => `<li><span class="muted">Instead of some ${esc(x.from)}</span> <span class="arrow" aria-hidden="true">→</span> <b>${esc(x.to)}</b> <span class="muted">· ${esc(x.why)}</span></li>`)
+        .join("")}</ul>`
+    : "";
+  return `<section class="card" id="patterns"><div class="row"><h3>Patterns</h3><span class="muted small">last 7 days</span></div>${notes}${swaps}</section>`;
 }
 
 /** A row per goal, a square per day, and how many days it was hit. */

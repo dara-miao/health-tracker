@@ -82,6 +82,43 @@ const SODIUM_SWAPS: Record<string, string> = {
   "pasta and noodles": "skipping the seasoning packet",
 };
 
+type Gap = "iron" | "fiber" | "fat" | "sodium" | "sugar";
+const GAP_WORDS: Record<Gap, string> = { iron: "more iron", fiber: "more fiber", fat: "healthy fats", sodium: "less sodium", sugar: "less added sugar" };
+
+/**
+ * Swaps for staples, each tagged with the gaps it helps. The swap that helps their biggest gaps wins,
+ * so the same staple gets a different suggestion depending on what's actually missing.
+ */
+const SWAPS: Record<string, { to: string; adds: Gap[] }[]> = {
+  chicken: [{ to: "93% lean ground beef or steak", adds: ["iron"] }, { to: "salmon", adds: ["fat"] }],
+  tuna: [{ to: "canned sardines or salmon", adds: ["fat", "iron"] }, { to: "no-salt-added tuna", adds: ["sodium"] }],
+  "protein shakes": [{ to: "Cream of Wheat made with water, protein powder stirred in", adds: ["iron"] }, { to: "a shake blended with chia seeds and berries", adds: ["fiber"] }],
+  "cottage cheese": [{ to: "low-sodium cottage cheese", adds: ["sodium"] }, { to: "edamame", adds: ["iron", "fiber"] }],
+  "Greek yogurt": [{ to: "plain Greek yogurt with chia seeds and raspberries", adds: ["fiber", "sugar"] }],
+  "egg whites": [{ to: "whole eggs (some of them)", adds: ["fat", "iron"] }, { to: "tofu scramble", adds: ["iron"] }],
+  eggs: [{ to: "tofu scramble", adds: ["iron"] }],
+  turkey: [{ to: "lean beef", adds: ["iron"] }],
+  rice: [{ to: "quinoa or lentil pasta", adds: ["iron", "fiber"] }],
+  "pasta and noodles": [{ to: "lentil or chickpea pasta", adds: ["iron", "fiber"] }],
+  bread: [{ to: "whole-grain bread", adds: ["fiber"] }],
+  oats: [{ to: "Cream of Wheat (more iron) on some days", adds: ["iron"] }],
+  granola: [{ to: "Grape-Nuts", adds: ["iron", "sugar"] }],
+  "protein bars": [{ to: "edamame or roasted chickpeas", adds: ["iron", "fiber", "sugar"] }],
+  "chips and pretzels": [{ to: "pumpkin seeds", adds: ["iron", "fat", "sodium"] }],
+  "deli meat and jerky": [{ to: "chicken or beef you cook yourself", adds: ["sodium"] }],
+  "salty seasoning": [{ to: "salt-free seasoning blends", adds: ["sodium"] }],
+  "soy sauce": [{ to: "low-sodium soy sauce", adds: ["sodium"] }],
+  cheese: [{ to: "avocado", adds: ["fat", "fiber", "sodium"] }],
+  sweets: [{ to: "dark chocolate (70%+)", adds: ["iron", "sugar"] }],
+  bananas: [{ to: "raspberries or pears", adds: ["fiber"] }],
+};
+
+export interface Swap {
+  from: string;
+  to: string;
+  why: string; // e.g. "more iron and more fiber"
+}
+
 const list = (xs: string[]) => (xs.length <= 1 ? xs.join("") : xs.length === 2 ? `${xs[0]} and ${xs[1]}` : `${xs.slice(0, -1).join(", ")}, and ${xs.at(-1)}`);
 const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
 const r1 = (n: number) => Math.round(n * 10) / 10;
@@ -111,13 +148,18 @@ export function regulars(foods: LoggedFood[]): Regular[] {
     .sort((a, b) => b.count - a.count || b.days - a.days);
 }
 
+export interface Patterns {
+  notes: string[]; // up to three sentences, most important first
+  swaps: Swap[]; // concrete grocery swaps for their staples, aimed at the biggest gaps
+}
+
 /**
- * Up to three things worth changing, most important first, as plain sentences.
- * `days` are finished days (not today), newest last; `foods` is what was logged over a longer window.
+ * What's worth changing, from `days` (finished days, not today) and `foods` (a longer window of items).
  */
-export function patterns(p: Player, days: DayStats[], foods: LoggedFood[]): string[] {
+export function patterns(p: Player, days: DayStats[], foods: LoggedFood[]): Patterns {
   const fed = days.filter((s) => s.foodCount > 0);
-  if (fed.length < 3) return [];
+  if (fed.length < 3) return { notes: [], swaps: [] };
+  const gaps = new Map<Gap, number>();
   const regs = regulars(foods);
   const top = regs.filter((r) => r.days >= 3).slice(0, 5);
   const topNames = top.map((r) => r.name);
@@ -130,6 +172,7 @@ export function patterns(p: Player, days: DayStats[], foods: LoggedFood[]): stri
   const iron = known("iron");
   const ironTarget = p.iron_target;
   if (ironTarget != null && iron.length >= 3 && avg(iron) < ironTarget * 0.85) {
+    gaps.set("iron", 1 - avg(iron) / ironTarget + 0.2);
     const empty = top.filter((r) => r.iron != null && r.iron < 0.5).map((r) => r.name).slice(0, 3);
     const because = empty.length ? ` Your go-tos (${list(empty)}) have almost none.` : "";
     out.push({
@@ -142,6 +185,7 @@ export function patterns(p: Player, days: DayStats[], foods: LoggedFood[]): stri
   const sodium = known("sodium");
   const sodiumMax = p.sodium_target;
   if (sodiumMax != null && sodium.length >= 3 && avg(sodium) > sodiumMax) {
+    gaps.set("sodium", avg(sodium) / sodiumMax - 1 + 0.15);
     const sources = regs
       .filter((r) => r.sodium != null && r.sodium >= 250)
       .map((r) => ({ ...r, total: r.sodium! * r.count }))
@@ -156,6 +200,7 @@ export function patterns(p: Player, days: DayStats[], foods: LoggedFood[]): stri
   // Fiber.
   const fiber = known("fiber");
   if (p.fiber_target != null && fiber.length >= 3 && avg(fiber) < p.fiber_target * 0.75) {
+    gaps.set("fiber", 1 - avg(fiber) / p.fiber_target);
     out.push({
       weight: 1 - avg(fiber) / p.fiber_target,
       text: `Fiber has averaged ${Math.round(avg(fiber))} g a day, against ${p.fiber_target}. ${list(fresh(IDEAS.fiber)).replace(/^./, (c) => c.toUpperCase())} are easy adds that go with what you already eat.`,
@@ -165,6 +210,7 @@ export function patterns(p: Player, days: DayStats[], foods: LoggedFood[]): stri
   // Fat: too little is common on a cut and matters for hormones.
   const fat = fed.map((s) => s.fat);
   if (p.fat_target != null && avg(fat) < p.fat_target * 0.75) {
+    gaps.set("fat", 1 - avg(fat) / p.fat_target);
     out.push({
       weight: 1 - avg(fat) / p.fat_target,
       text: `Fat has averaged ${Math.round(avg(fat))} g a day, against at least ${p.fat_target}. Too little for long stretches can throw off your period and hormones. Add ${list(fresh(IDEAS.fat))}.`,
@@ -180,6 +226,7 @@ export function patterns(p: Player, days: DayStats[], foods: LoggedFood[]): stri
   // Added sugar.
   const sugar = known("addedSugar");
   if (p.sugar_target != null && sugar.length >= 3 && avg(sugar) > p.sugar_target) {
+    gaps.set("sugar", avg(sugar) / p.sugar_target - 1);
     out.push({ weight: avg(sugar) / p.sugar_target - 1, text: `Added sugar has averaged ${Math.round(avg(sugar))} g a day, over your ${p.sugar_target} g limit. Check flavored yogurt, granola, protein bars and coffee drinks, which hide a lot of it.` });
   }
 
@@ -189,9 +236,30 @@ export function patterns(p: Player, days: DayStats[], foods: LoggedFood[]): stri
   if (top.length >= 3 && total >= 15 && share >= 0.5) {
     out.push({
       weight: share - 0.4,
-      text: `${Math.round(share * 100)}% of what you've logged lately is the same ${top.length} foods (${list(topNames)}). That's fine for hitting protein, but it's how a nutrient goes missing for weeks. Swap one new thing into each grocery run.`,
+      text: `${Math.round(share * 100)}% of what you've logged lately is the same ${top.length} foods (${list(topNames)}). That's fine for hitting protein, but it's how a nutrient goes missing for weeks. The swaps below are aimed at what's running low.`,
     });
   }
 
-  return out.sort((a, b) => b.weight - a.weight).slice(0, 3).map((o) => o.text);
+  return { notes: out.sort((a, b) => b.weight - a.weight).slice(0, 3).map((o) => o.text), swaps: groceSwaps(regs, gaps) };
+}
+
+/** For each staple they buy, the swap that helps their biggest gaps the most. Up to three, best first. */
+export function groceSwaps(regs: Regular[], gaps: Map<Gap, number>): Swap[] {
+  if (!gaps.size) return [];
+  const used = new Set<string>();
+  return regs
+    .filter((r) => r.days >= 2 && SWAPS[r.name])
+    .slice(0, 10)
+    .map((r) => {
+      const best = SWAPS[r.name]
+        .map((o) => ({ o, score: o.adds.reduce((n, g) => n + (gaps.get(g) ?? 0), 0) }))
+        .sort((a, b) => b.score - a.score)[0];
+      // How often they eat it matters too: swapping a daily staple does more than a weekly one.
+      return { r, o: best.o, score: best.score * (1 + Math.min(r.days, 7) / 7) };
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .filter((x) => !used.has(x.o.to) && used.add(x.o.to))
+    .slice(0, 3)
+    .map(({ r, o }) => ({ from: r.name, to: o.to, why: list(o.adds.filter((g) => gaps.has(g)).map((g) => GAP_WORDS[g])) }));
 }
