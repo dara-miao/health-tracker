@@ -777,9 +777,7 @@ function macros(env: Env, p: Player, s: DayStats, opts: { final: boolean }): str
     ...(p.sugar_target != null
       ? [row("Added sugar", s.sugar == null ? null : s.addedSugar ?? 0, p.sugar_target, "max", "g", { note: s.sugar == null ? "" : ` · ${s.sugar - (s.addedSugar ?? 0)} g natural` })]
       : []),
-    ...(p.sodium_target != null
-      ? [row("Sodium", s.sodium ?? null, p.sodium_target, "max", "mg", { note: s.sodium != null && s.sodium > SODIUM_RISK_MG ? ` · past the ${fmt(SODIUM_RISK_MG)} mg risk line` : "" })]
-      : []),
+    row("Sodium", s.sodium ?? null, p.sodium_target, "max", "mg", { note: s.sodium != null && s.sodium > SODIUM_RISK_MG ? ` · past the ${fmt(SODIUM_RISK_MG)} mg risk line` : "" }),
   ];
   const unitemized = s.unitemized ? `<p class="rules bad">Includes a total with no foods, so calories and protein don't count toward the goals.</p>` : "";
   return `<section class="card" id="nutrition"><h3>Macros</h3><div class="nrows">${rows.join("")}</div>${unitemized}
