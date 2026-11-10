@@ -33,3 +33,12 @@ describe("parseSodiumTag", () => {
     expect(parseSodiumTag("2 eggs (scrambled)")).toEqual({ description: "2 eggs (scrambled)", sodium_mg: null });
   });
 });
+
+describe("parseIronTag", () => {
+  it("reads milligrams and strips the tag", async () => {
+    const { parseIronTag } = await import("../src/mcp");
+    expect(parseIronTag("1 cup lentils [iron 6.6mg]")).toEqual({ description: "1 cup lentils", iron_mg: 6.6 });
+    expect(parseIronTag("steak (Iron: 3 mg)")).toEqual({ description: "steak", iron_mg: 3 });
+    expect(parseIronTag("2 eggs")).toEqual({ description: "2 eggs", iron_mg: null });
+  });
+});

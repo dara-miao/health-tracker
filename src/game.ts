@@ -66,6 +66,8 @@ export function goalLine(p: Player): string {
     p.fiber_target != null && `fiber at least ${p.fiber_target}g`,
     p.sugar_target != null && `added sugar at most ${p.sugar_target}g`,
     p.sodium_target != null && `sodium at most ${p.sodium_target.toLocaleString()}mg`,
+    p.iron_target != null && `iron at least ${p.iron_target}mg`,
+    p.water_target != null && `water at least ${p.water_target} oz`,
   ].filter(Boolean);
   const unscored = extras.length ? `, ${extras.join(", ")} (not scored)` : "";
   return `${p.goal_type}: ${cmp} ${p.calorie_target.toLocaleString()} cal, protein at least ${p.protein_target}g${unscored}`;
@@ -114,6 +116,7 @@ export function statusLines(env: Env, p: Player, s: DayStats, day: string, opts:
   lines.push(`🥑 ${fat} · 🍞 ${carbs}${fiber}`);
   if (p.sugar_target != null) lines.push(sugarLine(p, s));
   if (p.sodium_target != null) lines.push(sodiumLine(p, s));
+  lines.push(ironWaterLine(p, s));
   lines.push(
     s.sleepMinutes != null
       ? `😴 ${prettyDuration(s.sleepMinutes)} sleep ${sleepGoalMet(s, r) ? "✅" : "❌"}`
@@ -394,6 +397,13 @@ export function gymLine(p: Player, g: GymSummary): string {
 }
 
 /** Total sugar and the added part against the limit. */
+/** Iron and water against their targets, e.g. "🩸 9.5 / 18mg iron · 💧 48 / 70 oz water". */
+export function ironWaterLine(p: Player, s: DayStats): string {
+  const iron = s.iron == null ? "no iron estimates yet" : `${s.iron}${p.iron_target != null ? ` / ${p.iron_target}` : ""}mg iron`;
+  const water = `${s.water ?? 0}${p.water_target != null ? ` / ${p.water_target}` : ""} oz water`;
+  return `🩸 ${iron} · 💧 ${water}`;
+}
+
 /** The National Academies' chronic disease risk line for sodium (ages 14+): above this, cut back. */
 export const SODIUM_RISK_MG = 2300;
 
@@ -452,6 +462,12 @@ export async function eveningNudge(env: Env, player: Player, day: string): Promi
   }
   if (player.sodium_target != null && (s.sodium ?? 0) > player.sodium_target) {
     lines.push(`Sodium is over today (${s.sodium!.toLocaleString()}mg of ${player.sodium_target.toLocaleString()}mg). Drink extra water, and go easy on salty seasoning, sauces, deli meat, and chips tonight.`);
+  }
+  if (player.iron_target != null && s.iron != null && s.iron < player.iron_target) {
+    lines.push(`Iron is at ${s.iron}mg of ${player.iron_target}mg. Red meat, lentils, spinach, or fortified cereal would help; have it with vitamin C (berries, citrus, peppers) and away from dairy and coffee so more gets absorbed.`);
+  }
+  if (player.water_target != null && (s.water ?? 0) < player.water_target) {
+    lines.push(`Water is at ${s.water ?? 0} of ${player.water_target} oz. A bottle or two before bed would close it.`);
   }
   if (player.fiber_target != null && s.fiber != null && s.fiber < player.fiber_target) {
     lines.push(`Fiber is at ${s.fiber}g of ${player.fiber_target}g. Berries, beans, oats, or a pear would help.`);

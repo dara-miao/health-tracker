@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { goalLine, sodiumLine, statusLines, sugarLine, wakeLine } from "../src/game";
+import { goalLine, ironWaterLine, sodiumLine, statusLines, sugarLine, wakeLine } from "../src/game";
 import type { Env, Player } from "../src/db";
 
 const env = {
@@ -8,7 +8,7 @@ const env = {
 } as Env;
 const dara: Player = {
   id: 1, name: "Dara", poke_api_key: null, goal_type: "cut", calorie_target: 1700, protein_target: 120,
-  fat_target: 45, carb_target: 170, workout_target: 2, sugar_target: null, fiber_target: null, sodium_target: null, goal_weight_lb: 120, pending_bed_at: null,
+  fat_target: 45, carb_target: 170, workout_target: 2, sugar_target: null, fiber_target: null, sodium_target: null, iron_target: null, water_target: null, goal_weight_lb: 120, pending_bed_at: null,
 };
 const stats = (calories: number) => ({ calories, protein: 50, fat: 20, carbs: 100, foodCount: 2, sleepMinutes: null, wakeAt: null });
 
@@ -61,5 +61,13 @@ describe("sodium", () => {
     expect(statusLines(env, dara, s, "2026-09-30").join("\n")).not.toMatch(/sodium/);
     expect(statusLines(env, tracking, s, "2026-09-30").join("\n")).toMatch(/900mg \/ 1,900mg sodium/);
     expect(goalLine(tracking)).toMatch(/sodium at most 1,900mg/);
+  });
+});
+
+describe("iron and water", () => {
+  it("shows both against their targets", () => {
+    const p = { ...dara, iron_target: 18, water_target: 70 };
+    expect(ironWaterLine(p, { ...stats(1500), iron: 9.5, water: 48 })).toBe("🩸 9.5 / 18mg iron · 💧 48 / 70 oz water");
+    expect(ironWaterLine(dara, stats(1500))).toBe("🩸 no iron estimates yet · 💧 0 oz water");
   });
 });

@@ -3,7 +3,7 @@
 // Any other key is refused.
 import * as db from "./db";
 import type { Env, FoodItem, Player } from "./db";
-import { UserError, dayStats, goToBed, goalLine, gymLine, gymSummary, logNight, mealTotals, sodiumLine, statusReport, sugarLine, totalsLine, wakeUp } from "./game";
+import { UserError, dayStats, goToBed, goalLine, gymLine, gymSummary, logNight, ironWaterLine, mealTotals, sodiumLine, statusReport, sugarLine, totalsLine, wakeUp } from "./game";
 import { WORKOUT_KINDS, type WorkoutKind } from "./gym";
 import { addDays, formatOffset, gameDay, parseTime, prettyDay, utcOffsetMinutes } from "./time";
 
@@ -19,6 +19,8 @@ Each day has four goals: calories (cut: stay at or under; bulk: reach at least),
 - Log foods, not totals. If they only give a number ("I hit 3000 today"), ask what they ate. A calorie number with no foods is saved but doesn't count toward the calorie or protein goal.
 - Sugar: estimate sugar_g and added_sugar_g for every item, whether or not they track sugar. Added sugar is sugar put in during processing or cooking (sweets, soda, sweetened coffee drinks, flavored yogurt, granola, sauces, honey, syrup); sugar inside whole fruit, plain milk and plain yogurt is natural. Sugar isn't scored. When they ask to track it or change the limit ("track my sugar", "set my sugar limit to 21g"), call set_sugar_goal; to stop, call it with null.
 - Fiber: estimate fiber_g for every item too. It's shown with fat and carbs, not one of the four goals. When they ask for a fiber goal ("aim for 30g of fiber"), set_goal with fiber_target.
+- Iron: estimate iron_mg for every item too (one decimal is fine: an egg ~0.9, 4 oz beef ~3, 1 cup cooked spinach ~6, 1 cup lentils ~6.6, most fortified cereal 8 to 18 per serving; dairy, whey and plain yogurt are ~0). If they take an iron supplement, don't log it as food. Iron isn't one of the goals. When they ask for an iron target, set_goal with iron_target.
+- Water: when they mention drinking water ("drank a bottle", "had 2 glasses", "finished my 32oz"), call log_water right away with the ounces (a standard bottle is 16.9 oz, a glass 8 oz; ask once if a container's size is unclear, and remember it). Only plain water, sparkling water and unsweetened tea count; log other drinks as food. If one was logged by mistake, remove_water. When they set a daily amount ("aim for 80 oz"), set_goal with water_target.
 - Sodium: estimate sodium_mg for every item too, whether or not they track it. Don't lowball restaurant food, sauces, soups, deli meat, bread, cheese (cottage cheese is high) and anything salted or cured; use the label or the chain's nutrition facts when known. Count salt and salty seasonings added while cooking or at the table (salt, seasoned salt and blends, Tajín, bouillon, soy sauce, hot sauce, seasoning packets) as their own item: 1/4 tsp of salt is about 575mg. Plain spices and salt-free blends (garlic or onion powder, pepper, paprika, cumin, chili flakes) have essentially none. If they track sodium and cooked something themselves without saying how they seasoned it, log a typical amount and ask which seasoning and roughly how much (this counts as the meal's one question if it's the biggest unknown). Sodium isn't one of the goals. When they ask to track it or change the limit ("track my sodium", "keep my sodium under 1900mg"), call set_sodium_goal; to stop, call it with null.
 - Workouts: when they say they went to the gym, worked out, lifted, played a sport, or went for a run ("hit legs", "just got back from the gym", "played tennis", "ran 3 miles"), call log_workout right away, once per session. Two separate sessions in a day (gym in the morning, a run at night) are two log_workout calls. Don't log the same session twice: "heading to the gym" then "back from the gym" is one workout (log it when they say they went or are back), and get_status shows what's already logged today. If they say they didn't actually go, or one was logged by mistake, remove_workout. Workouts aren't scored; they fill in a GitHub-style consistency grid. When they set a weekly goal ("I want to go 3 times a week"), set_workout_target.
 - Call get_status before answering questions about progress, and before editing or deleting so you have the right ids.
@@ -38,9 +40,10 @@ const ITEM_SCHEMA = {
       type: "number",
       description: "The part of sugar_g that's added (table sugar, syrups, honey, juice concentrate, sweets, sweetened drinks and sauces). Sugar naturally in whole fruit, plain milk and plain yogurt is not added. Use the label's 'Includes Xg Added Sugars' when known.",
     },
+    iron_mg: { type: "number", description: "Iron in milligrams, one decimal is fine. Red meat, liver, shellfish, beans, lentils, tofu, spinach and fortified cereal have the most; dairy almost none." },
     sodium_mg: { type: "number", description: "Sodium in milligrams, including salt and salty seasoning. Use the label or the restaurant's nutrition facts when known." },
   },
-  required: ["description", "calories", "protein_g", "fat_g", "carbs_g", "sugar_g", "added_sugar_g", "fiber_g", "sodium_mg"],
+  required: ["description", "calories", "protein_g", "fat_g", "carbs_g", "sugar_g", "added_sugar_g", "fiber_g", "sodium_mg", "iron_mg"],
 };
 
 function tools() {
@@ -125,6 +128,8 @@ Meals: leave meal_id null to start a new meal. Pass an existing meal_id (from ge
         fat_target: { type: ["integer", "null"], description: "minimum grams, shown but not scored" },
         carb_target: { type: ["integer", "null"], description: "rough daily aim in grams, shown but not scored" },
         fiber_target: { type: ["integer", "null"], description: "daily fiber aim in grams, shown but not one of the goals" },
+        iron_target: { type: ["integer", "null"], description: "daily iron aim in mg (18 for women 19 to 50), shown but not one of the goals" },
+        water_target: { type: ["integer", "null"], description: "daily water aim in fl oz, shown but not one of the goals" },
       },
       required: ["goal_type", "calorie_target", "protein_target"],
     },
@@ -158,6 +163,23 @@ Meals: leave meal_id null to start a new meal. Pass an existing meal_id (from ge
       properties: { added_max_g: { type: ["integer", "null"], minimum: 1, maximum: 200, description: "Max grams of added sugar a day; 25 is the American Heart Association's limit for women, 36 for men. Null turns tracking off." } },
       required: ["added_max_g"],
     },
+  },
+  {
+    name: "log_water",
+    description: "Log water they drank, in fluid ounces. Call once per drink they mention. Not one of the goals.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        oz: { type: "number", minimum: 1, maximum: 128, description: "Fluid ounces: a standard bottle is 16.9, a glass 8, a big tumbler 32 to 40. For mL, divide by 29.6." },
+        day: { type: ["string", "null"], description: "YYYY-MM-DD to backdate. Null for today." },
+      },
+      required: ["oz"],
+    },
+  },
+  {
+    name: "remove_water",
+    description: "Remove the most recent water logged on a day (logged by mistake).",
+    inputSchema: { type: "object", properties: { day: { type: ["string", "null"], description: "YYYY-MM-DD. Null for today." } } },
   },
   {
     name: "log_workout",
@@ -238,6 +260,15 @@ export function parseSodiumTag(description: string): { description: string; sodi
   return { description: description.replace(SODIUM_TAG, "").trim(), sodium_mg: m[2]?.toLowerCase() === "g" ? n * 1000 : n };
 }
 
+const IRON_TAG = /\s*[\[(]\s*iron\s*:?\s*(\d+(?:\.\d+)?)\s*(?:mg)?\s*[\])]/i;
+
+/** "1 cup lentils [iron 6.6mg]" -> the description without the tag, plus the milligrams. */
+export function parseIronTag(description: string): { description: string; iron_mg: number | null } {
+  const m = description.match(IRON_TAG);
+  if (!m) return { description, iron_mg: null };
+  return { description: description.replace(IRON_TAG, "").trim(), iron_mg: Number(m[1]) };
+}
+
 function items(raw: unknown): FoodItem[] {
   if (!Array.isArray(raw) || raw.length === 0) throw new ToolError("items must be a non-empty list.");
   return raw.map((it) => {
@@ -252,7 +283,8 @@ function items(raw: unknown): FoodItem[] {
       return it?.[k] == null || !Number.isFinite(n) || n < 0 ? null : n;
     };
     // Agents with a tool list from before the sugar and fiber fields send them as tags in the description instead.
-    const na = parseSodiumTag(it.description);
+    const fe = parseIronTag(it.description);
+    const na = parseSodiumTag(fe.description);
     const fiber = parseFiberTag(na.description);
     const tag = parseSugarTag(fiber.description);
     return {
@@ -262,6 +294,7 @@ function items(raw: unknown): FoodItem[] {
       added_sugar_g: opt("added_sugar_g") ?? tag.added_sugar_g,
       fiber_g: opt("fiber_g") ?? fiber.fiber_g,
       sodium_mg: opt("sodium_mg") ?? na.sodium_mg,
+      iron_mg: opt("iron_mg") ?? fe.iron_mg,
     };
   });
 }
@@ -350,6 +383,8 @@ async function callTool(env: Env, player: Player, name: string, args: Args, now:
       }
       await db.setGoal(env.DB, player.id, goal);
       if (args.fiber_target != null && Number(args.fiber_target) > 0) await db.setFiberTarget(env.DB, player.id, Math.round(Number(args.fiber_target)));
+      if (args.iron_target != null && Number(args.iron_target) > 0) await db.setIronTarget(env.DB, player.id, Math.round(Number(args.iron_target)));
+      if (args.water_target != null && Number(args.water_target) > 0) await db.setWaterTarget(env.DB, player.id, Math.round(Number(args.water_target)));
       return `Goal set: ${goalLine((await db.getPlayer(env.DB, player.id))!)}.`;
     }
 
@@ -364,6 +399,24 @@ async function callTool(env: Env, player: Player, name: string, args: Args, now:
         note = ` That's at or under the ${goal} lb goal. Time to switch to a maintenance target (ask them, then set_goal).`;
       }
       return `Logged ${lb} lb for ${today}.${goal != null ? ` Goal: ${goal} lb.` : ""}${note}`;
+    }
+
+    case "log_water":
+    case "remove_water": {
+      const day = pastDay(args.day, today, 7);
+      let verb: string;
+      if (name === "remove_water") {
+        const oz = await db.undoWater(env.DB, player.id, day);
+        if (oz == null) return `No water logged on ${prettyDay(day)}.`;
+        verb = `Removed ${oz} oz from ${prettyDay(day)}.`;
+      } else {
+        const oz = Number(args.oz);
+        if (!(oz >= 1 && oz <= 128)) throw new ToolError("oz must be 1 to 128 fluid ounces.");
+        await db.addWater(env.DB, player.id, day, oz);
+        verb = `Logged ${Math.round(oz * 10) / 10} oz of water for ${prettyDay(day)}.`;
+      }
+      const p = (await db.getPlayer(env.DB, player.id))!;
+      return `${verb} ${ironWaterLine(p, await dayStats(env, p.id, day)).split(" · ")[1]}`;
     }
 
     case "log_workout":
@@ -451,7 +504,8 @@ async function agentNotes(env: Env, player: Player, tool: string, origin: string
   if (once) return "";
   const page = `${origin}/me/${await db.privateToken(env.DB, player.id)}`;
   const notes = [
-    `Workouts: if you don't have a log_workout tool, ${player.name} logs workouts with one tap on their page. When they mention a workout (gym, a sport, a run), reply with this link: ${page}#gym`,
+    `Workouts and water are logged only through you (there are no buttons on the page). If you don't have log_workout or log_water tools, tell ${player.name} once to remove and re-add the Health Tracker integration in Poke so the new tools show up.`,
+    `Iron: if your log_food items have no iron_mg field, add it to the item's description as a tag, e.g. "1 cup lentils [iron 6.6mg]". The app reads the tag and removes it from the name.`,
   ];
   notes.push(`Fiber: if your log_food items have no fiber_g field, add it to the item's description as a tag, e.g. "1 cup oatmeal [fiber 4g]". The app reads the tag and removes it from the name.`);
   if (player.sugar_target != null) {

@@ -119,6 +119,16 @@ async function handlePageAction(env: Env, player: Player, action: string, form: 
     if (n >= 1 && n <= 7) await db.setWorkoutTarget(env.DB, player.id, n);
     return "gym";
   }
+  if (form.has("iron_target")) {
+    const n = Math.round(Number(field("iron_target")));
+    if (n >= 5 && n <= 60) await db.setIronTarget(env.DB, player.id, n);
+    return "settings";
+  }
+  if (form.has("water_target")) {
+    const n = Math.round(Number(field("water_target")));
+    if (n >= 16 && n <= 200) await db.setWaterTarget(env.DB, player.id, n);
+    return "settings";
+  }
   if (form.has("fiber_target")) {
     const n = Math.round(Number(field("fiber_target")));
     if (n >= 5 && n <= 100) await db.setFiberTarget(env.DB, player.id, n);

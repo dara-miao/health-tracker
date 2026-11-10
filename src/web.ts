@@ -602,7 +602,7 @@ function mealBlock(m: db.MealWithItems, sugar: boolean, tz: string, sodium = fal
   const t = mealTotals(m);
   const when = prettyTime(`${m.created_at.replace(" ", "T")}Z`, tz).toLowerCase().replace(" ", "");
   const item = (it: db.FoodEntry) =>
-    `<li>${esc(it.description)} <span class="muted">(${it.calories} cal, ${it.protein_g}g P, ${it.fat_g}g F, ${it.carbs_g}g C${it.fiber_g != null ? `, ${it.fiber_g}g fiber` : ""}${sugar && it.sugar_g != null ? `, ${it.sugar_g}g sugar${it.added_sugar_g ? ` (${it.added_sugar_g}g added)` : ""}` : ""}${sodium && it.sodium_mg != null ? `, ${fmt(it.sodium_mg)}mg sodium` : ""})</span></li>`;
+    `<li>${esc(it.description)} <span class="muted">(${it.calories} cal, ${it.protein_g}g P, ${it.fat_g}g F, ${it.carbs_g}g C${it.fiber_g != null ? `, ${it.fiber_g}g fiber` : ""}${sugar && it.sugar_g != null ? `, ${it.sugar_g}g sugar${it.added_sugar_g ? ` (${it.added_sugar_g}g added)` : ""}` : ""}${it.iron_mg != null ? `, ${it.iron_mg}mg iron` : ""}${sodium && it.sodium_mg != null ? `, ${fmt(it.sodium_mg)}mg sodium` : ""})</span></li>`;
   return `<div class="meal"><div class="meal-head"><div>${mealSlot(m.name, m.created_at, tz)} <span class="muted small">· ${when}</span></div><div class="tot">${fmt(t.calories)} cal · ${t.protein} g protein</div></div>
     <ul>${m.items.map(item).join("")}</ul></div>`;
 }
@@ -749,13 +749,14 @@ function sleepTiles(env: Env, s: DayStats, day: string): string {
  */
 function macros(env: Env, p: Player, s: DayStats, opts: { final: boolean }): string {
   const r = db.rules(env);
-  const row = (name: string, value: number | null, target: number | null, kind: "min" | "about" | "max", unit: string, opt: { goal?: boolean; note?: string; floor?: number } = {}) => {
+  const row = (name: string, value: number | null, target: number | null, kind: "min" | "about" | "max", unit: string, opt: { goal?: boolean; note?: string; floor?: number; dec?: boolean } = {}) => {
+    const f = (x: number) => (opt.dec ? (Math.round(x * 10) / 10).toLocaleString("en-US") : fmt(x));
     const v = value ?? 0;
-    const u = unit === "cal" ? " cal" : unit === "mg" ? " mg" : " g";
-    const n = (x: number) => fmt(x) + u;
+    const u = ` ${unit}`;
+    const n = (x: number) => f(x) + u;
     const pct = target ? Math.min(100, Math.round((v / target) * 100)) : 0;
     const over = kind === "max" && target != null && v > target + (unit === "cal" ? r.calorieGrace ?? 0 : 0);
-    const of = target == null ? "" : `<span class="muted"> / ${kind === "about" ? "~" : ""}${fmt(target)}</span>`;
+    const of = target == null ? "" : `<span class="muted"> / ${kind === "about" ? "~" : ""}${f(target)}</span>`;
     let st =
       value == null ? (unit === "cal" || name === "Protein" ? "nothing logged" : "no estimates yet")
       : target == null ? "no target"
@@ -763,7 +764,7 @@ function macros(env: Env, p: Player, s: DayStats, opts: { final: boolean }): str
       : v >= target ? "done" : opts.final ? `${n(target - v)} short` : `${n(target - v)} to go`;
     if (opt.floor != null && value != null && v < opt.floor && (opts.final || v === 0)) st = `under the ${fmt(opt.floor)} floor`;
     const goal = opt.goal ? '<span class="gtag">goal</span>' : "";
-    return `<div class="nrow"><div class="nhead"><span class="nk">${name}${goal}</span><span class="nv">${value == null ? "–" : fmt(v)}${of}<span class="muted">${unit === "cal" ? "" : ` ${unit}`}</span></span></div>
+    return `<div class="nrow"><div class="nhead"><span class="nk">${name}${goal}</span><span class="nv">${value == null ? "–" : f(v)}${of}<span class="muted">${unit === "cal" ? "" : ` ${unit}`}</span></span></div>
       <div class="nbar"><span class="${over ? "warn" : ""}" style="width:${target ? pct : 0}%"></span></div><div class="ns${over ? " bad" : ""}">${st}${opt.note ?? ""}</div></div>`;
   };
   const fed = s.foodCount > 0;
@@ -777,6 +778,8 @@ function macros(env: Env, p: Player, s: DayStats, opts: { final: boolean }): str
     ...(p.sugar_target != null
       ? [row("Added sugar", s.sugar == null ? null : s.addedSugar ?? 0, p.sugar_target, "max", "g", { note: s.sugar == null ? "" : ` · ${s.sugar - (s.addedSugar ?? 0)} g natural` })]
       : []),
+    row("Iron", s.iron ?? null, p.iron_target, "min", "mg", { dec: true }),
+    row("Water", s.water ?? 0, p.water_target, "min", "oz"),
     row("Sodium", s.sodium ?? null, p.sodium_target, "max", "mg", { note: s.sodium != null && s.sodium > SODIUM_RISK_MG ? ` · past the ${fmt(SODIUM_RISK_MG)} mg risk line` : "" }),
   ];
   const unitemized = s.unitemized ? `<p class="rules bad">Includes a total with no foods, so calories and protein don't count toward the goals.</p>` : "";
@@ -1031,6 +1034,8 @@ function dayDetail(env: Env, p: Player, s: DayStats): string {
     ...(s.fiber != null ? [`${s.fiber}g fiber`] : []),
     ...(p.sugar_target != null && s.sugar != null ? [`${s.sugar}g sugar (${s.addedSugar ?? 0}g added)`] : []),
     ...(p.sodium_target != null && s.sodium != null ? [`${fmt(s.sodium)}mg sodium`] : []),
+    ...(s.iron != null ? [`${s.iron}mg iron`] : []),
+    ...(s.water ? [`${s.water} oz water`] : []),
     s.sleepMinutes != null ? `${prettyDuration(s.sleepMinutes)} sleep` : "no sleep logged",
     s.wakeAt ? `up ${prettyTime(s.wakeAt, env.GAME_TZ)}` : "no wake-up logged",
   ];
@@ -1210,6 +1215,16 @@ function trends(env: Env, x: Series, days: string[], today: string, weights: { d
       chart: (x: Series) => barChart(bars(x, (s) => s.fiber ?? null, (s) => x.p.fiber_target == null || (s.fiber ?? 0) >= x.p.fiber_target, (_, v) => `${v}g fiber`), ACCENT, () => x.p.fiber_target, { h, goal: { dir: "min", label: `${x.p.fiber_target}g` } }),
     },
     {
+      title: "Iron",
+      goal: (p: Player) => (p.iron_target == null ? "no target" : `at least ${p.iron_target} mg`),
+      chart: (x: Series) => barChart(bars(x, (s) => s.iron ?? null, (s) => x.p.iron_target == null || (s.iron ?? 0) >= x.p.iron_target, (_, v) => `${v} mg iron`), ACCENT, () => x.p.iron_target, { h, goal: { dir: "min", label: `${x.p.iron_target} mg` } }),
+    },
+    {
+      title: "Water",
+      goal: (p: Player) => (p.water_target == null ? "no target" : `at least ${p.water_target} oz`),
+      chart: (x: Series) => barChart(bars(x, (s) => s.water ?? null, (s) => x.p.water_target == null || (s.water ?? 0) >= x.p.water_target, (_, v) => `${v} oz water`), ACCENT, () => x.p.water_target, { h, goal: { dir: "min", label: `${x.p.water_target} oz` } }),
+    },
+    {
       title: "Sleep",
       same: true,
       goal: () => `${prettyDuration(r.sleepTargetMinutes).replace(" 00m", "")}+`,
@@ -1268,7 +1283,6 @@ document.querySelectorAll(".tips, .gym").forEach((card) => {
 
 /** This week's workouts as a strip, a line about them, and one-tap logging (so Poke doesn't need the workout tools). */
 function gymPanel(p: Player, g: GymSummary, meToken: string, today: string): string {
-  const action = `/me/${esc(meToken)}/workout`;
   const start = weekStart(today);
   const yesterday = addDays(today, -1);
   const strip = weekDays(start)
@@ -1282,19 +1296,14 @@ function gymPanel(p: Player, g: GymSummary, meToken: string, today: string): str
   const list = recent.length
     ? `<ul class="wlist">${recent
         .map(
-          (w) => `<li>${w.day === today ? "Today" : "Yesterday"} · ${KIND_LABEL[w.kind]}${w.note ? ` (${esc(w.note)})` : ""}
-          <form method="post" action="${action}"><input type="hidden" name="remove" value="${w.id}"><button class="pill" type="submit" aria-label="Remove">Undo</button></form></li>`,
+          (w) => `<li>${w.day === today ? "Today" : "Yesterday"} · ${KIND_LABEL[w.kind]}${w.note ? ` (${esc(w.note)})` : ""}</li>`,
         )
         .join("")}</ul>`
     : "";
   const goal = Array.from({ length: 7 }, (_, k) => `<option value="${k + 1}"${p.workout_target === k + 1 ? " selected" : ""}>${k + 1}</option>`).join("");
   return `<section class="card gym-log" id="gym"><div class="row"><h3>Workouts</h3><span class="small"><b>${g.thisWeek}</b><span class="muted">${p.workout_target ? ` / ${p.workout_target}` : ""} this week</span></span></div>
     <div class="wstrip">${strip}</div>
-    <p class="prose note">${esc(gymSentence(p, g, start))}</p>
-    <form method="post" action="${action}">
-      <div class="seg" role="radiogroup" aria-label="Day"><label><input type="radio" name="day" value="today" checked> Today</label><label><input type="radio" name="day" value="yesterday"> Yesterday</label></div>
-      <div class="kinds"><button class="pill" name="kind" value="gym">Gym</button><button class="pill" name="kind" value="sport">Sport</button><button class="pill" name="kind" value="run">Run</button></div>
-    </form>${list}
+    <p class="prose note">${esc(gymSentence(p, g, start))} Text Poke when you work out.</p>${list}
     <form method="post" action="/me/${esc(meToken)}/settings" class="inline">
       <span class="muted">Weekly goal</span>
       <select name="workout_target" aria-label="Weekly goal">${p.workout_target ? "" : '<option value="" selected>–</option>'}${goal}</select><button class="pill" type="submit">Save</button>
@@ -1318,8 +1327,10 @@ function settingsPanel(p: Player, meToken: string): string {
       ? `<form method="post" action="${action}" class="inline"><span class="muted">Sodium limit</span>${num("sodium_target", p.sodium_target, 500, 10000, "Sodium limit in milligrams")}<span class="muted">mg a day</span><button class="pill" type="submit">Save</button>
       <button class="pill" type="submit" name="sodium" value="off">Stop tracking</button></form>`
       : `<form method="post" action="${action}" class="inline"><span class="muted">Track sodium, limit</span>${num("sodium_target", 1900, 500, 10000, "Sodium limit in milligrams")}<span class="muted">mg</span><button class="pill" type="submit">Turn on</button></form>`;
-  return `<h2 id="settings">Settings</h2><div class="card">${fiber}${sugar}${sodium}
-    <p class="rules">Fiber: about 14 g per 1,000 calories, or 25 g a day for women and 38 g for men under 50. Added sugar: the American Heart Association's limit is 25 g for women, 36 g for men. Sodium: the WHO's limit is 2,000 mg; 1,500 mg is ideal, and above 2,300 mg is the risk line to cut back from.</p></div>`;
+  const iron = `<form method="post" action="${action}" class="inline"><span class="muted">Iron goal</span>${num("iron_target", p.iron_target ?? 18, 5, 60, "Iron goal in milligrams")}<span class="muted">mg a day</span><button class="pill" type="submit">Save</button></form>`;
+  const water = `<form method="post" action="${action}" class="inline"><span class="muted">Water goal</span>${num("water_target", p.water_target ?? 70, 16, 200, "Water goal in fluid ounces")}<span class="muted">oz a day</span><button class="pill" type="submit">Save</button></form>`;
+  return `<h2 id="settings">Settings</h2><div class="card">${fiber}${iron}${water}${sugar}${sodium}
+    <p class="rules">Fiber: about 14 g per 1,000 calories, or 25 g a day for women and 38 g for men under 50. Added sugar: the American Heart Association's limit is 25 g for women, 36 g for men. Sodium: the WHO's limit is 2,000 mg; 1,500 mg is ideal, and above 2,300 mg is the risk line to cut back from. Iron: 18 mg a day for women 19 to 50, 8 mg for men; absorbed best with vitamin C and away from dairy and coffee. Water: about 70 oz of drinks a day for women, 100 for men (the rest of the National Academies' total comes from food). Text Poke to log water.</p></div>`;
 }
 
 // ---------- password (once per phone) ----------
