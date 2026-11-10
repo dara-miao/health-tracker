@@ -262,6 +262,15 @@ export async function mealsForDay(db: D1Database, playerId: number, day: string)
   }));
 }
 
+/** Every item logged over an inclusive range of days, for spotting patterns. */
+export async function foodsForRange(db: D1Database, playerId: number, from: string, to: string) {
+  const { results } = await db
+    .prepare("SELECT day, description, sodium_mg, iron_mg, fiber_g, added_sugar_g FROM food_entries WHERE player_id = ? AND day BETWEEN ? AND ? ORDER BY day, id")
+    .bind(playerId, from, to)
+    .all<{ day: string; description: string; sodium_mg: number | null; iron_mg: number | null; fiber_g: number | null; added_sugar_g: number | null }>();
+  return results;
+}
+
 /** Per-day stats for one player over an inclusive range of days. */
 export async function statsForRange(
   db: D1Database,

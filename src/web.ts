@@ -2,7 +2,7 @@
 // small inline script from JSON embedded in the page.
 import * as db from "./db";
 import type { Env, Player } from "./db";
-import { GOAL_NAMES, SODIUM_RISK_MG, daySentence, dayStats, goalStreaks, gymSentence, gymSummary, lastWeekAverages, mealTotals, todaySentence, trackingStart, weekGoals, weekNotes, type Averages, type GymSummary, type WeekGoals } from "./game";
+import { GOAL_NAMES, SODIUM_RISK_MG, daySentence, recentPatterns, dayStats, goalStreaks, gymSentence, gymSummary, lastWeekAverages, mealTotals, todaySentence, trackingStart, weekGoals, weekNotes, type Averages, type GymSummary, type WeekGoals } from "./game";
 import { EMPTY_DAY, GOAL_KEYS, calorieGoalMet, dayStatus, proteinGoalMet, scoreDay, wakeGoalMet, wakeMinutes, wakeTarget, type DayStats, type GoalStatus } from "./scoring";
 import type { Workout } from "./gym";
 import { addDays, gameDay, localParts, prettyClock, prettyDay, prettyDuration, prettyTime, weekDays, weekdayOf, weekStart } from "./time";
@@ -381,6 +381,8 @@ main > section + section, main > section + .tiles2 { margin-top: 12px; }
 .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
 .prose { font-family: var(--serif); color: var(--ink); margin: 0; }
 .prose.big { font-size: 24px; line-height: 1.36; max-width: 36ch; }
+.prose.pat { font-size: 18px; line-height: 1.45; margin-top: 12px; }
+.prose.pat + .prose.pat { padding-top: 12px; border-top: 1px solid var(--grid); }
 .prose.note { font-size: 18px; line-height: 1.45; color: var(--ink-2); margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--grid); }
 .card.rings { display: flex; align-items: center; gap: 20px; padding: 18px; }
 .rings svg { width: 168px; height: 168px; flex: none; }
@@ -427,7 +429,9 @@ main > section + section, main > section + .tiles2 { margin-top: 12px; }
 .wbar.on1 { background: color-mix(in srgb, var(--series-1) 60%, transparent); }
 .wbar.on2 { background: var(--series-1); }
 .wbar.future { background: transparent; box-shadow: inset 0 0 0 1px var(--grid); }
-.gym-log .prose.note { margin-bottom: 14px; }
+.gym-log .prose.pat { font-size: 18px; line-height: 1.45; margin-top: 12px; }
+.prose.pat + .prose.pat { padding-top: 12px; border-top: 1px solid var(--grid); }
+.prose.note { margin-bottom: 14px; }
 .meal-head .tot { margin: 0; font-weight: 500; }
 .days .dhead .dl { width: 18px; text-align: center; font-size: 10px; }
 .days .dp { width: auto; gap: 6px; }
@@ -787,6 +791,14 @@ function macros(env: Env, p: Player, s: DayStats, opts: { final: boolean }): str
     <p class="rules">Calories and protein are goals; the rest are shown, not goals. Targets are in Settings at the bottom of Today.</p></section>`;
 }
 
+/** What's been running low or high lately, and what to eat about it. */
+function patternsCard(items: string[]): string {
+  const body = items.length
+    ? items.map((t) => `<p class="prose pat">${esc(t)}</p>`).join("")
+    : `<p class="prose pat muted">Nothing stands out from the last week. Once a few days are logged, this notices what's running low or high and what to eat about it.</p>`;
+  return `<section class="card" id="patterns"><div class="row"><h3>Patterns</h3><span class="muted small">last 7 days</span></div>${body}</section>`;
+}
+
 /** A row per goal, a square per day, and how many days it was hit. */
 function weekGrid(w: WeekGoals, today: string): string {
   const heads = w.days.map((d) => `<span class="dh${d === today ? " now" : ""}" title="${prettyDay(d)}">${prettyDay(d).slice(0, 1)}</span>`).join("");
@@ -823,7 +835,7 @@ function averagesCard(a: Averages, p: Player, weights: { day: string; lb: number
 export async function homePage(env: Env, player: Player, meToken: string, now: Date): Promise<Response> {
   const today = gameDay(now, env.GAME_TZ);
   const start = weekStart(today);
-  const [s, week, streaks, avgs, gym, todayMeals, weights] = await Promise.all([
+  const [s, week, streaks, avgs, gym, todayMeals, weights, pats] = await Promise.all([
     dayStats(env, player.id, today),
     weekGoals(env, player, start, today),
     goalStreaks(env, player, today),
@@ -831,6 +843,7 @@ export async function homePage(env: Env, player: Player, meToken: string, now: D
     gymSummary(env, player, today),
     db.mealsForDay(env.DB, player.id, today),
     db.weightsForPlayer(env.DB, player.id),
+    recentPatterns(env, player, today),
   ]);
   const r = db.rules(env);
   const notes = weekNotes(week, streaks, today);
@@ -843,6 +856,7 @@ export async function homePage(env: Env, player: Player, meToken: string, now: D
     <section class="intro"><div class="eyebrow">${FULL_DATE(today)}</div><p class="prose big">${esc(todaySentence(env, player, s, today))}</p></section>
     ${rings(env, player, s, today, today)}
     ${macros(env, player, s, { final: false })}
+    ${patternsCard(pats)}
     ${sleepTiles(env, s, today)}
     <section class="card tips"><div class="row"><h3>This week</h3><span class="muted small">${prettyDay(start).slice(4)} to ${prettyDay(addDays(start, 6)).slice(4)}</span></div>
       ${weekGrid(week, today)}${STATUS_KEY}<p class="tip-out" aria-live="polite"></p>

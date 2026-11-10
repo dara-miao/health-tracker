@@ -1,4 +1,5 @@
 import * as db from "./db";
+import { patterns } from "./patterns";
 import type { Env, MealWithItems, Player } from "./db";
 import { EMPTY_DAY, GOAL_KEYS, calorieGoalMet, dayStatus, proteinGoalMet, scoreDay, sleepGoalMet, wakeMinutes, wakeTarget, type DayStats, type DayStatus } from "./scoring";
 import { countByDay, weekCount, weekStreak, type Workout } from "./gym";
@@ -350,6 +351,7 @@ export async function statusReport(env: Env, player: Player, now: Date, offset: 
     `Goal: ${goalLine(player)}. Sleep target: ${prettyDuration(r.sleepTargetMinutes)}. Wake-up: by ${prettyClock(r.wakeWeekday)} weekdays, ${prettyClock(r.wakeWeekend)} Sat/Sun, ${r.wakeGraceMinutes} min grace.`,
     ...statusLines(env, player, stats, today).map((l) => `  ${l}`),
     `  ${gymLine(player, gym)}. Gym is tracked for consistency only, not scored.`,
+    ...(await recentPatterns(env, player, today)).map((t, i) => `${i ? "  " : "Patterns (bring one up when it fits, e.g. when they ask what to eat or log their groceries): "}${t}`),
     player.pending_bed_at ? `In bed since ${prettyTime(player.pending_bed_at, tz)}; hasn't logged waking up.` : "",
     lastWeight
       ? `Latest weight: ${lastWeight.lb} lb on ${lastWeight.day}${player.goal_weight_lb ? `, goal ${player.goal_weight_lb} lb` : ""}.`
@@ -397,6 +399,15 @@ export function gymLine(p: Player, g: GymSummary): string {
 }
 
 /** Total sugar and the added part against the limit. */
+/** What's been running low or high: up to three sentences from the last week of days and two weeks of food. */
+export async function recentPatterns(env: Env, p: Player, today: string): Promise<string[]> {
+  const [stats, foods] = await Promise.all([
+    db.statsForRange(env.DB, p.id, addDays(today, -7), addDays(today, -1)),
+    db.foodsForRange(env.DB, p.id, addDays(today, -14), today),
+  ]);
+  return patterns(p, [...stats.values()], foods);
+}
+
 /** Iron and water against their targets, e.g. "🩸 9.5 / 18mg iron · 💧 48 / 70 oz water". */
 export function ironWaterLine(p: Player, s: DayStats): string {
   const iron = s.iron == null ? "no iron estimates yet" : `${s.iron}${p.iron_target != null ? ` / ${p.iron_target}` : ""}mg iron`;
