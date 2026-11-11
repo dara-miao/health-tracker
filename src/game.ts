@@ -2,7 +2,7 @@ import * as db from "./db";
 import { patterns, type Patterns } from "./patterns";
 import { clock, digestInsight, gapWords, mealTime, nights, type DigestInsight, type Night } from "./digest";
 import type { Env, MealWithItems, Player } from "./db";
-import { EMPTY_DAY, GOAL_KEYS, calorieGoalMet, dayStatus, proteinGoalMet, scoreDay, sleepGoalMet, wakeMinutes, wakeTarget, type DayStats, type DayStatus } from "./scoring";
+import { DEFAULT_EAT_GAP_MINUTES, EMPTY_DAY, GOAL_KEYS, calorieGoalMet, eatGap, dayStatus, proteinGoalMet, scoreDay, sleepGoalMet, wakeMinutes, wakeTarget, type DayStats, type DayStatus } from "./scoring";
 import { countByDay, weekCount, weekStreak, type Workout } from "./gym";
 import { addDays, gameDay, localParts, prettyClock, prettyDay, prettyDuration, prettyTime, weekDays, weekdayOf, weekStart } from "./time";
 
@@ -21,7 +21,9 @@ export function sleepDay(wakeAt: Date, tz: string): string {
 
 export async function goToBed(env: Env, player: Player, at: Date): Promise<string> {
   await db.setPendingBed(env.DB, player.id, at.toISOString());
-  return `Bedtime logged at ${prettyTime(at.toISOString(), env.GAME_TZ)}.`;
+  const s = await dayStats(env, player.id, gameDay(at, env.GAME_TZ));
+  const kitchen = s.lastAteAt && Date.parse(s.lastAteAt) <= at.getTime() ? ` ${kitchenLine(env, { ...s, nextBedAt: at.toISOString() })}` : "";
+  return `Bedtime logged at ${prettyTime(at.toISOString(), env.GAME_TZ)}.${kitchen}`;
 }
 
 export async function wakeUp(env: Env, player: Player, at: Date): Promise<string> {
@@ -125,15 +127,28 @@ export function statusLines(env: Env, p: Player, s: DayStats, day: string, opts:
       : "😴 no sleep logged",
   );
   lines.push(wakeLine(env, day, s.wakeAt));
+  lines.push(kitchenLine(env, s));
   return lines;
 }
 
+/** The kitchen-closed goal: the day's last meal at least the eating gap before that night's bedtime. */
+export function kitchenLine(env: Env, s: DayStats): string {
+  const r = db.rules(env);
+  const need = r.eatGapMinutes ?? DEFAULT_EAT_GAP_MINUTES;
+  const goal = `stop eating ${gapWords(need)} before bed`;
+  if (!s.lastAteAt) return `🍽️ no meal times logged (${goal})`;
+  const ate = prettyTime(s.lastAteAt, r.tz);
+  const gap = eatGap(s);
+  if (gap == null) return `🍽️ last ate ${ate}; in bed at ${prettyTime(new Date(Date.parse(s.lastAteAt) + need * 60000).toISOString(), r.tz)} or later keeps the kitchen-closed goal (${goal})`;
+  return `🍽️ last ate ${ate}, bed ${gapWords(gap)} later ${gap >= need ? "✅" : `❌ (${goal})`}`;
+}
+
 export async function dayStats(env: Env, playerId: number, day: string): Promise<DayStats> {
-  return (await db.statsForRange(env.DB, playerId, day, day)).get(day) ?? { ...EMPTY_DAY };
+  return (await db.statsForRange(env.DB, playerId, day, day, env.GAME_TZ)).get(day) ?? { ...EMPTY_DAY };
 }
 
 export type GoalKey = (typeof GOAL_KEYS)[number];
-export const GOAL_NAMES: Record<GoalKey, string> = { cal: "Calories", protein: "Protein", sleep: "Sleep", wake: "Up on time" };
+export const GOAL_NAMES: Record<GoalKey, string> = { cal: "Calories", protein: "Protein", sleep: "Sleep", wake: "Up on time", eat: "Kitchen closed" };
 
 export interface WeekGoals {
   start: string;
@@ -153,7 +168,7 @@ export async function weekGoals(env: Env, player: Player, start: string, today: 
   const from = (await trackingStart(env)) ?? "";
   const days = weekDays(start);
   const r = db.rules(env);
-  const stats = await db.statsForRange(env.DB, player.id, start, days[6]);
+  const stats = await db.statsForRange(env.DB, player.id, start, days[6], env.GAME_TZ);
   const status = days.map((day) => (day > today || day < from ? null : dayStatus(player, stats.get(day) ?? EMPTY_DAY, r, day, today)));
   const counts = Object.fromEntries(GOAL_KEYS.map((k) => [k, { hit: 0, of: 0 }])) as WeekGoals["counts"];
   for (const st of status) {
@@ -175,7 +190,7 @@ export function weekLine(w: WeekGoals): string {
 export async function goalStreaks(env: Env, player: Player, today: string): Promise<Record<GoalKey, number>> {
   const from = (await trackingStart(env)) ?? "";
   const r = db.rules(env);
-  const stats = await db.statsForRange(env.DB, player.id, addDays(today, -90), today);
+  const stats = await db.statsForRange(env.DB, player.id, addDays(today, -90), today, env.GAME_TZ);
   const out = {} as Record<GoalKey, number>;
   for (const k of GOAL_KEYS) {
     let n = 0;
@@ -199,7 +214,7 @@ export interface Averages {
 
 /** Averages over the seven finished days before today, from the days that have each thing logged. */
 export async function lastWeekAverages(env: Env, player: Player, today: string): Promise<Averages> {
-  const stats = [...(await db.statsForRange(env.DB, player.id, addDays(today, -7), addDays(today, -1))).values()];
+  const stats = [...(await db.statsForRange(env.DB, player.id, addDays(today, -7), addDays(today, -1), env.GAME_TZ)).values()];
   const avg = (xs: number[]) => (xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null);
   const fed = stats.filter((s) => s.foodCount > 0 && !s.unitemized);
   return {
@@ -285,6 +300,7 @@ export function weekNotes(w: WeekGoals, streaks: Record<GoalKey, number>, today:
     streaks.wake >= 2 && `you've been up on time ${streaks.wake} days in a row`,
     streaks.protein >= 2 && `protein's been hit ${streaks.protein} days running`,
     streaks.cal >= 2 && `calories have been on target ${streaks.cal} days running`,
+    streaks.eat >= 2 && `you've stopped eating in time ${streaks.eat} nights running`,
   ].filter((x): x is string => Boolean(x)).slice(0, 2);
   if (runs.length) {
     const line = runs.join(", and ");
@@ -410,7 +426,7 @@ export function gymLine(p: Player, g: GymSummary): string {
 /** What's been running low or high: up to three sentences from the last week of days and two weeks of food. */
 export async function recentPatterns(env: Env, p: Player, today: string): Promise<Patterns> {
   const [stats, foods] = await Promise.all([
-    db.statsForRange(env.DB, p.id, addDays(today, -7), addDays(today, -1)),
+    db.statsForRange(env.DB, p.id, addDays(today, -7), addDays(today, -1), env.GAME_TZ),
     db.foodsForRange(env.DB, p.id, addDays(today, -14), today),
   ]);
   return patterns(p, [...stats.values()], foods);
@@ -479,8 +495,8 @@ export async function totalsLine(env: Env, player: Player, day: string): Promise
 export async function dayRecap(env: Env, player: Player, day: string): Promise<string> {
   const s = await dayStats(env, player.id, day);
   const sc = scoreDay(player, s, db.rules(env), day);
-  const hit = [sc.calOk, sc.proteinOk, sc.sleepOk, sc.wakeOk].filter(Boolean).length;
-  return [`📋 ${prettyDay(day)}: ${hit} of 4 goals`, ...statusLines(env, player, s, day, { final: true })].join("\n");
+  const hit = [sc.calOk, sc.proteinOk, sc.sleepOk, sc.wakeOk, sc.eatOk].filter(Boolean).length;
+  return [`📋 ${prettyDay(day)}: ${hit} of ${GOAL_KEYS.length} goals`, ...statusLines(env, player, s, day, { final: true })].join("\n");
 }
 
 /** Monday morning: how often each goal was hit last week, and workouts. */
@@ -494,6 +510,23 @@ export async function weekSummary(env: Env, player: Player, start: string): Prom
     notes,
     `🏋️ ${gymSentence(player, gym, start)}`,
   ].filter(Boolean).join("\n");
+}
+
+/** Minutes after the evening's midnight, so 1am (25 * 60) sorts after 11pm. Mornings before noon count as after midnight. */
+function eveningMinutes(iso: string, tz: string): number {
+  const p = localParts(new Date(iso), tz);
+  return p.hour * 60 + p.minute + (p.hour < 12 ? 24 * 60 : 0);
+}
+
+/** Their usual bedtime over the last week, in minutes after midnight of the evening (1am = 25 * 60), or null. */
+export async function usualBedtime(env: Env, playerId: number, day: string): Promise<number | null> {
+  const stats = await db.statsForRange(env.DB, playerId, addDays(day, -6), day, env.GAME_TZ);
+  const beds = [...stats.values()]
+    .map((s) => s.bedAt)
+    .filter((b): b is string => Boolean(b))
+    .map((b) => eveningMinutes(b, env.GAME_TZ));
+  if (beds.length < 3) return null;
+  return Math.round(beds.reduce((a, b) => a + b, 0) / beds.length / 15) * 15;
 }
 
 /** The daily carb minimum the brain needs (the National Academies' RDA). */
@@ -527,6 +560,17 @@ export async function eveningNudge(env: Env, player: Player, day: string): Promi
     lines.push(`${player.protein_target - s.protein}g protein to go. Greek yogurt, cottage cheese, or egg whites are easy wins.`);
   }
   const r = db.rules(env);
+  const usual = await usualBedtime(env, player.id, day);
+  if (usual != null) {
+    const need = r.eatGapMinutes ?? DEFAULT_EAT_GAP_MINUTES;
+    const by = usual - need;
+    const last = s.lastAteAt ? eveningMinutes(s.lastAteAt, r.tz) : null;
+    lines.push(
+      last != null && last > by
+        ? `🍽️ You've already eaten past ${prettyClock(by)}. To still close the kitchen tonight, get in bed at least ${gapWords(need)} after your last bite (${prettyClock(last + need)}).`
+        : `🍽️ You usually go to bed around ${prettyClock(usual)}, so the kitchen closes at ${prettyClock(by)} for the kitchen-closed goal.`,
+    );
+  }
   const tomorrow = addDays(day, 1);
   lines.push(
     `Tomorrow (${prettyDay(tomorrow)}): up by ${prettyClock(wakeTarget(tomorrow, r))} for the wake-up goal. Text gm when you get up.`,

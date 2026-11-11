@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scoreDay, wakeGoalMet, type DayStats, type Goal, type Rules } from "../src/scoring";
+import { dayStatus, eatGoalMet, scoreDay, wakeGoalMet, type DayStats, type Goal, type Rules } from "../src/scoring";
 
 const rules: Rules = {
   tz: "America/Los_Angeles",
@@ -27,12 +27,17 @@ describe("scoreDay", () => {
     expect(scoreDay(cutter, day(1700, 120, 420), rules, WED).points).toBe(3);
     expect(scoreDay(bulker, day(3000, 155, 420), rules, WED).points).toBe(3);
   });
-  it("Dara's Sep 30 scores 1 of 4 at 1,700 / 120g (6h sleep, no wake-up logged)", () => {
-    expect(scoreDay(cutter, day(2085, 125, 360), rules, WED)).toEqual({ calOk: false, proteinOk: true, sleepOk: false, wakeOk: false, points: 1 });
+  it("Dara's Sep 30 scores 1 of 5 at 1,700 / 120g (6h sleep, no wake-up or meal times logged)", () => {
+    expect(scoreDay(cutter, day(2085, 125, 360), rules, WED)).toEqual({ calOk: false, proteinOk: true, sleepOk: false, wakeOk: false, eatOk: false, points: 1 });
   });
-  it("a perfect day is 4 points", () => {
-    const s = { ...day(1650, 125, 450), wakeAt: new Date(`${WED}T08:20:00-07:00`).toISOString() };
-    expect(scoreDay(cutter, s, rules, WED).points).toBe(4);
+  it("a perfect day is 5 points", () => {
+    const s = {
+      ...day(1650, 125, 450),
+      wakeAt: new Date(`${WED}T08:20:00-07:00`).toISOString(),
+      lastAteAt: new Date(`${WED}T19:30:00-07:00`).toISOString(),
+      nextBedAt: new Date(`${WED}T23:30:00-07:00`).toISOString(),
+    };
+    expect(scoreDay(cutter, s, rules, WED).points).toBe(5);
   });
   it("a cut day under the floor never earns the calorie point", () => {
     expect(scoreDay(cutter, day(1100, 120, null), rules, WED).calOk).toBe(false);
@@ -113,5 +118,26 @@ describe("calorie and protein grace", () => {
     expect(calorieGoalMet(bulk, day(2949), r)).toBe(false);
     expect(proteinGoalMet(cut, day(1500, 115), r)).toBe(true);
     expect(proteinGoalMet(cut, day(1500, 114), r)).toBe(false);
+  });
+});
+
+describe("kitchen closed", () => {
+  const r = { tz: "America/Los_Angeles", sleepTargetMinutes: 420, cutFloorCalories: 1200, wakeWeekday: 510, wakeWeekend: 630, wakeGraceMinutes: 10 };
+  const cut = { goal_type: "cut" as const, calorie_target: 1700, protein_target: 120 };
+  const WED = "2026-09-30";
+  const t = (hm: string, d = WED) => new Date(`${d}T${hm}:00-07:00`).toISOString();
+  const s = (ate: string | null, bed: string | null) => ({ calories: 1500, protein: 120, fat: 40, carbs: 150, foodCount: 3, sleepMinutes: null, wakeAt: null, lastAteAt: ate, nextBedAt: bed });
+  it("is hit at 3 hours or more before bed, close within 30 minutes of that, missed otherwise", () => {
+    expect(dayStatus(cut, s(t("20:00"), t("23:00")), r, WED, "2026-10-01").eat).toBe("hit");
+    expect(dayStatus(cut, s(t("20:40"), t("23:20")), r, WED, "2026-10-01").eat).toBe("near");
+    expect(dayStatus(cut, s(t("22:30"), t("00:30", "2026-10-01")), r, WED, "2026-10-01").eat).toBe("miss");
+  });
+  it("is in progress today until bedtime, and blank with no meal times", () => {
+    expect(dayStatus(cut, s(t("20:00"), null), r, WED, WED).eat).toBe("now");
+    expect(dayStatus(cut, s(null, null), r, WED, "2026-10-01").eat).toBe("none");
+  });
+  it("uses EAT_GAP_HOURS when set", () => {
+    expect(eatGoalMet(s(t("21:30"), t("23:30")), { ...r, eatGapMinutes: 120 })).toBe(true);
+    expect(eatGoalMet(s(t("21:30"), t("23:30")), r)).toBe(false);
   });
 });

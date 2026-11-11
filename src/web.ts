@@ -3,7 +3,7 @@
 import * as db from "./db";
 import type { Env, Player } from "./db";
 import { GOAL_NAMES, SODIUM_RISK_MG, daySentence, eatingAndSleep, recentPatterns, dayStats, goalStreaks, gymSentence, gymSummary, lastWeekAverages, mealTotals, todaySentence, trackingStart, weekGoals, weekNotes, type Averages, type EatingAndSleep, type GymSummary, type WeekGoals } from "./game";
-import { EMPTY_DAY, GOAL_KEYS, calorieGoalMet, dayStatus, proteinGoalMet, scoreDay, wakeGoalMet, wakeMinutes, wakeTarget, type DayStats, type GoalStatus } from "./scoring";
+import { DEFAULT_EAT_GAP_MINUTES, EMPTY_DAY, GOAL_KEYS, calorieGoalMet, eatGap, type Rules, dayStatus, proteinGoalMet, scoreDay, wakeGoalMet, wakeMinutes, wakeTarget, type DayStats, type GoalStatus } from "./scoring";
 import type { Workout } from "./gym";
 import type { Patterns } from "./patterns";
 import { clock, gapWords, mealTime } from "./digest";
@@ -267,7 +267,7 @@ form.inline .wk-line { flex-basis: 100%; }
 .chips a[aria-current] { color: var(--page); background: var(--ink); }
 .rates-row + .rates-row { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--grid); }
 .rates-row h3 { font-size: 14px; margin: 0 2px 8px; }
-.rates { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; border-radius: 14px; overflow: hidden; }
+.rates { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 2px; border-radius: 14px; overflow: hidden; }
 .rate { background: var(--raise); padding: 8px 10px 10px; min-width: 0; }
 .rate .rk { font-size: 11px; color: var(--muted); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rate .rv { font-size: 22px; line-height: 1.2; font-weight: 600; }
@@ -414,7 +414,7 @@ main > section + section, main > section + .tiles2 { margin-top: 12px; }
 .s-none { width: 5px; height: 5px; border-radius: 50%; background: var(--axis); }
 .s-now { border: 1.6px dashed var(--series-1); }
 .s-future { width: 5px; height: 5px; border-radius: 50%; background: transparent; }
-.wgrid { display: grid; grid-template-columns: 84px repeat(7, minmax(0, 1fr)) 36px; gap: 9px 4px; align-items: center; font-size: 13px; }
+.wgrid { display: grid; grid-template-columns: 96px repeat(7, minmax(0, 1fr)) 36px; gap: 9px 4px; align-items: center; font-size: 13px; }
 .wgrid .dh, .wday .dh { text-align: center; font-size: 11px; color: var(--muted); }
 .dh.now { color: var(--ink); font-weight: 700; }
 .wgrid .cell { display: flex; justify-content: center; }
@@ -635,7 +635,7 @@ export function joinPage(name: string, error = ""): Response {
   return layout(
     "Set up",
     `<header class="onboard">${MARK}<h1 class="title">Set up</h1>
-      <p class="lede">Food, sleep, and wake-up.<br>Four goals a day.</p></header>
+      <p class="lede">Food, sleep, and wake-up.<br>Five goals a day.</p></header>
     <form method="post" class="card form">
       ${error ? `<p class="error" role="alert">${esc(error)}</p>` : ""}
       <label for="code">Join code</label><input id="code" name="code" required autocomplete="off" autocapitalize="off" placeholder="The JOIN_CODE secret">
@@ -700,7 +700,18 @@ function mark(st: GoalStatus, tip: string): string {
 
 const STATUS_KEY = `<p class="rules skey"><span><i class="sm s-hit"></i>hit</span><span><i class="sm s-near"></i>close</span><span><i class="sm s-miss"></i>missed</span><span><i class="sm s-none"></i>nothing logged</span></p>`;
 
-/** Four concentric rings, outside in: calories, protein, sleep, up on time. Each fills toward its goal. */
+/** The kitchen-closed ring: full when the last meal was the eating gap or more before bed. */
+function kitchenRing(s: DayStats, r: Rules, st: GoalStatus) {
+  const need = r.eatGapMinutes ?? DEFAULT_EAT_GAP_MINUTES;
+  const gap = eatGap(s);
+  const text =
+    gap != null ? `${gapWords(Math.max(0, gap))} before bed`
+    : s.lastAteAt ? `last ate ${clock(s.lastAteAt, r.tz)}`
+    : `${gapWords(need)} before bed`;
+  return { name: "Kitchen closed", pct: gap == null ? 0 : Math.max(0, gap) / need, text, warn: st === "near" || st === "miss" };
+}
+
+/** Five concentric rings, outside in: calories, protein, sleep, up on time, kitchen closed. Each fills toward its goal. */
 function rings(env: Env, p: Player, s: DayStats, day: string, today: string): string {
   const r = db.rules(env);
   const st = dayStatus(p, s, r, day, today);
@@ -721,15 +732,16 @@ function rings(env: Env, p: Player, s: DayStats, day: string, today: string): st
       text: s.wakeAt ? `${prettyTime(s.wakeAt, r.tz).toLowerCase().replace(" ", "")}, by ${prettyClock(wakeTarget(day, r)).toLowerCase().replace(" ", "")}` : "not logged",
       warn: st.wake === "near" || st.wake === "miss",
     },
+    kitchenRing(s, r, st.eat),
   ];
-  const R = [92, 76, 60, 44];
-  const tone = (k: number) => `color-mix(in srgb, var(--series-1) ${100 - k * 22}%, var(--mixto))`;
+  const R = [92, 77, 62, 47, 32];
+  const tone = (k: number) => `color-mix(in srgb, var(--series-1) ${100 - k * 18}%, var(--mixto))`;
   const arcs = items
     .map((it, k) => {
       const c = 2 * Math.PI * R[k];
       const len = c * Math.max(0, Math.min(1, it.pct));
-      return `<circle cx="100" cy="100" r="${R[k]}" fill="none" stroke="var(--track)" stroke-width="13"/>${
-        len > 0 ? `<circle cx="100" cy="100" r="${R[k]}" fill="none" stroke="${it.warn ? "var(--critical)" : tone(k)}" stroke-width="13" stroke-linecap="round" stroke-dasharray="${len.toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 100 100)"/>` : ""
+      return `<circle cx="100" cy="100" r="${R[k]}" fill="none" stroke="var(--track)" stroke-width="12"/>${
+        len > 0 ? `<circle cx="100" cy="100" r="${R[k]}" fill="none" stroke="${it.warn ? "var(--critical)" : tone(k)}" stroke-width="12" stroke-linecap="round" stroke-dasharray="${len.toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 100 100)"/>` : ""
       }`;
     })
     .join("");
@@ -817,11 +829,11 @@ function patternsCard(pat: Patterns): string {
 }
 
 /** How close to bed they've been eating, and whether it shows in their sleep. */
-function eatingCard(e: EatingAndSleep, tz: string): string {
+function eatingCard(e: EatingAndSleep, tz: string, need: number): string {
   const last = e.lastNight
     ? `<p class="wline"><span class="k">Last night</span> <b>${clock(e.lastNight.lastAteAt, tz)}</b> <span class="muted">last bite · bed ${gapWords(e.lastNight.gapMinutes)} later</span></p>`
     : "";
-  return `<section class="card" id="eating"><div class="row"><h3>Eating before bed</h3><span class="muted small">last 4 weeks</span></div><p class="prose pat">${esc(e.insight.text)}</p>${last}</section>`;
+  return `<section class="card" id="eating"><div class="row"><h3>Eating before bed</h3><span class="muted small">last 4 weeks</span></div><p class="prose pat">${esc(e.insight.text)}</p>${last}<p class="rules">Kitchen closed is a goal: stop eating ${gapWords(need)} before bed. 2 to 3 hours is the usual advice for reflux and sleep.</p></section>`;
 }
 
 /** A row per goal, a square per day, and how many days it was hit. */
@@ -884,7 +896,7 @@ export async function homePage(env: Env, player: Player, meToken: string, now: D
     ${macros(env, player, s, { final: false })}
     ${patternsCard(pats)}
     ${sleepTiles(env, s, today)}
-    ${eatingCard(eating, env.GAME_TZ)}
+    ${eatingCard(eating, env.GAME_TZ, r.eatGapMinutes ?? DEFAULT_EAT_GAP_MINUTES)}
     <section class="card tips"><div class="row"><h3>This week</h3><span class="muted small">${prettyDay(start).slice(4)} to ${prettyDay(addDays(start, 6)).slice(4)}</span></div>
       ${weekGrid(week, today)}${STATUS_KEY}<p class="tip-out" aria-live="polite"></p>
       ${notes ? `<p class="prose note">${esc(notes)}</p>` : ""}</section>
@@ -1004,7 +1016,7 @@ export async function historyPage(env: Env, player: Player, now: Date, range: st
   for (let w = weekStart(today); w >= weekStart(start); w = addDays(w, -7)) weeks.push(w);
   const [scored, stats, weights] = await Promise.all([
     Promise.all(weeks.map((w) => weekGoals(env, player, w, today))),
-    db.statsForRange(env.DB, player.id, from, today),
+    db.statsForRange(env.DB, player.id, from, today, env.GAME_TZ),
     db.weightsForPlayer(env.DB, player.id),
   ]);
   const goalHeads = GOAL_KEYS.map((k) => `<th class="n">${GOAL_NAMES[k]}</th>`).join("");
@@ -1079,6 +1091,7 @@ function dayDetail(env: Env, p: Player, s: DayStats): string {
     ...(s.water ? [`${s.water} oz water`] : []),
     s.sleepMinutes != null ? `${prettyDuration(s.sleepMinutes)} sleep` : "no sleep logged",
     s.wakeAt ? `up ${prettyTime(s.wakeAt, env.GAME_TZ)}` : "no wake-up logged",
+    ...(s.lastAteAt ? [`last ate ${prettyTime(s.lastAteAt, env.GAME_TZ)}${eatGap(s) != null ? `, ${gapWords(eatGap(s)!)} before bed` : ""}`] : []),
   ];
   return parts.join(" · ");
 }
@@ -1095,7 +1108,7 @@ function dayByDay(env: Env, { p, stat }: Series, days: string[], today: string):
     })
     .join("");
   return `<div class="card days one"><div class="dhead"><span></span><span class="dp">${GOAL_KEYS.map((k) => `<span class="dl" title="${GOAL_NAMES[k]}">${GOAL_NAMES[k].slice(0, 3)}</span>`).join("")}</span></div>${rows}
-    ${STATUS_KEY}<p class="rules">Calories, protein, sleep, up on time. Tap a day for the numbers.</p></div>`;
+    ${STATUS_KEY}<p class="rules">Calories, protein, sleep, up on time, kitchen closed. Tap a day for the numbers.</p></div>`;
 }
 
 // Wake-up dots plot (WAKE_SPAN - minutes after midnight), so 5am sits at the top and 1pm at the bottom.
@@ -1380,7 +1393,7 @@ export function lockedPage(next: string, error = ""): Response {
   return layout(
     "Health",
     `<header class="onboard">${MARK}<h1 class="title wordmark">Health</h1>
-      <p class="lede">Food, sleep, and wake-up.<br>Four goals a day.</p></header>
+      <p class="lede">Food, sleep, and wake-up.<br>Five goals a day.</p></header>
     <form method="post" action="/unlock" class="card form">
       ${error ? `<p class="error" role="alert">${esc(error)}</p>` : ""}
       <input type="hidden" name="next" value="${esc(next)}">

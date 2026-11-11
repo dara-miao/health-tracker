@@ -21,6 +21,8 @@ CUT_FLOOR_CALORIES = "1200"
 # Food estimates aren't exact: calories this far past the target and protein this far short still count.
 CALORIE_GRACE = "50"
 PROTEIN_GRACE_G = "5"
+# Kitchen closed: stop eating this many hours before bed (2 to 3 is the usual advice for reflux and sleep).
+EAT_GAP_HOURS = "3"
 
 [[d1_databases]]
 binding = "DB"

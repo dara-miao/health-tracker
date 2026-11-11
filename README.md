@@ -1,6 +1,6 @@
 # Health
 
-**A personal food, sleep, and gym tracker you use by texting.** You text your AI agent what you ate, when you went to bed, and when you woke up. It estimates calories and macros, logs everything to this app over the [Model Context Protocol](https://modelcontextprotocol.io), and shows which of your four daily goals you hit.
+**A personal food, sleep, and gym tracker you use by texting.** You text your AI agent what you ate, when you went to bed, and when you woke up. It estimates calories and macros, logs everything to this app over the [Model Context Protocol](https://modelcontextprotocol.io), and shows which of your five daily goals you hit.
 
 No calorie-counting app, no forms, no barcode scanning. Just texts like these:
 
@@ -42,7 +42,7 @@ flowchart LR
 
 ## The goals
 
-Four goals a day. There are no points: each goal is **hit**, **close** (within 10% on food, 30 minutes on sleep and wake-up), **missed**, or **nothing logged**, which is left blank instead of counting against you.
+Five goals a day. There are no points: each goal is **hit**, **close** (within 10% on food, 30 minutes on sleep, wake-up and kitchen closed), **missed**, or **nothing logged**, which is left blank instead of counting against you.
 
 | | Cut | Bulk |
 |---|---|---|
@@ -50,12 +50,14 @@ Four goals a day. There are no points: each goal is **hit**, **close** (within 1
 | 💪 Protein | at or over target | at or over target |
 | 😴 Sleep | 7h or more | 7h or more |
 | ⏰ Wake-up | up by 8:30 weekdays, 9:30 weekends (10 min grace) | same |
+| 🍽️ Kitchen closed | last meal 3h or more before that night's bedtime | same |
 
-- The Today page leads with your day in a sentence, then four rings that fill toward each goal, the week as a grid of squares, per-goal streaks, and 7-day averages.
+- The Today page leads with your day in a sentence, then five rings that fill toward each goal, the week as a grid of squares, per-goal streaks, and 7-day averages.
 - Food estimates aren't exact, so calories get 50 cal of grace past the target and protein 5g short of it (`CALORIE_GRACE`, `PROTEIN_GRACE_G`).
 - Fat and carbs are tracked and shown but aren't goals.
 - **Sugar (opt-in):** the agent estimates total and added sugar for every item, so you can track added (refined) vs natural sugar against a daily limit.
 - **Eating before bed:** each meal keeps the time it was eaten (when it was logged, unless you say otherwise: "had dinner at 7"). The Today page pairs each night with your last meal before bed and compares sleep after eating within 2 hours of bed with sleep after stopping 3+ hours before, over the last 4 weeks, once there are 3 nights of each.
+- **Kitchen closed** counts toward the day you ate, and is decided once that night's bedtime is logged. Saying "gn" tells you right away whether you made it, and the 9pm check-in says when the kitchen closes, based on your usual bedtime that week. 3 hours is the default because 2 to 3 hours is the usual advice for reflux and sleep; change it with `EAT_GAP_HOURS`.
 - **Gym consistency is tracked on the side, not scored:** this week's workouts (gym, sport, or run), a GitHub-style grid of every week on the history page, darker on days with two or more, and a streak of weeks that hit your weekly goal.
 - Logging nothing doesn't count as a perfect cut day; it's blank.
 - A bare total ("I hit 3,000 today") with no foods is saved but doesn't count toward the calorie or protein goal; the agent asks what was actually eaten.
@@ -135,6 +137,7 @@ Tune the rules in `wrangler.toml`:
 | `WAKE_GRACE_MINUTES` | `10` | minutes of grace on the wake-up deadline |
 | `BREAK_DAYS` | | weekdays that use the weekend wake-up time |
 | `CUT_FLOOR_CALORIES` | `1200` | a cut day under this never hits the calorie goal |
+| `EAT_GAP_HOURS` | `3` | how long before bed to stop eating for the kitchen-closed goal |
 
 ### Local development
 

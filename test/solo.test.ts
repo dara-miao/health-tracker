@@ -7,8 +7,8 @@ import { sha256, type Env } from "../src/db";
 
 describe("weekLine", () => {
   it("shows each goal's days hit out of days logged", () => {
-    const counts = { cal: { hit: 3, of: 5 }, protein: { hit: 3, of: 5 }, sleep: { hit: 6, of: 7 }, wake: { hit: 0, of: 0 } };
-    expect(weekLine({ start: "2026-10-19", days: [], status: [], counts })).toBe("Calories 3/5 · Protein 3/5 · Sleep 6/7 · Up on time –");
+    const counts = { cal: { hit: 3, of: 5 }, protein: { hit: 3, of: 5 }, sleep: { hit: 6, of: 7 }, wake: { hit: 0, of: 0 }, eat: { hit: 2, of: 4 } };
+    expect(weekLine({ start: "2026-10-19", days: [], status: [], counts })).toBe("Calories 3/5 · Protein 3/5 · Sleep 6/7 · Up on time – · Kitchen closed 2/4");
   });
 });
 
@@ -23,7 +23,7 @@ describe("dayStatus", () => {
     expect(dayStatus(cut, day(2200, 80), rules, WED, "2026-10-01")).toMatchObject({ cal: "miss", protein: "miss" });
   });
   it("leaves a day with nothing logged blank, not missed", () => {
-    expect(dayStatus(cut, { ...day(0, 0), foodCount: 0 }, rules, WED, "2026-10-01")).toEqual({ cal: "none", protein: "none", sleep: "none", wake: "none" });
+    expect(dayStatus(cut, { ...day(0, 0), foodCount: 0 }, rules, WED, "2026-10-01")).toEqual({ cal: "none", protein: "none", sleep: "none", wake: "none", eat: "none" });
   });
   it("keeps today's food in progress until it's settled", () => {
     expect(dayStatus(cut, day(900, 60), rules, WED, WED)).toMatchObject({ cal: "now", protein: "now" });

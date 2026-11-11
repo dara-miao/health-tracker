@@ -1,6 +1,7 @@
 import type { Workout } from "./gym";
 import { EMPTY_DAY, looksUnitemized, type DayStats, type GoalType, type Rules } from "./scoring";
 import { addDays } from "./time";
+import { mealTime } from "./digest";
 
 export interface Env {
   DB: D1Database;
@@ -12,6 +13,7 @@ export interface Env {
   WAKE_GRACE_MINUTES: string;
   CALORIE_GRACE?: string;
   PROTEIN_GRACE_G?: string;
+  EAT_GAP_HOURS?: string; // stop eating this long before bed for the kitchen-closed goal (default 3)
   BREAK_DAYS?: string; // "2026-10-08,2026-10-09" or ranges "2026-11-25..2026-11-29"
   JOIN_CODE: string;
   OWNER_NAME: string; // the one player this app is for
@@ -45,6 +47,7 @@ export function rules(env: Env): Rules {
     breakDays: breakDays(env.BREAK_DAYS),
     calorieGrace: Number(env.CALORIE_GRACE ?? 50),
     proteinGrace: Number(env.PROTEIN_GRACE_G ?? 5),
+    eatGapMinutes: Math.round(Number(env.EAT_GAP_HOURS ?? 3) * 60),
   };
 }
 
@@ -294,8 +297,9 @@ export async function statsForRange(
   playerId: number,
   from: string,
   to: string,
+  tz: string,
 ): Promise<Map<string, DayStats>> {
-  const [food, sleep, water] = await db.batch<any>([
+  const [food, sleep, water, meals] = await db.batch<any>([
     db
       .prepare(
         `SELECT day, SUM(calories) AS calories, SUM(protein_g) AS protein, SUM(fat_g) AS fat, SUM(carbs_g) AS carbs,
@@ -303,8 +307,10 @@ export async function statsForRange(
          FROM food_entries WHERE player_id = ? AND day BETWEEN ? AND ? GROUP BY day`,
       )
       .bind(playerId, from, to),
-    db.prepare("SELECT day, minutes, wake_at, bed_at FROM sleep_entries WHERE player_id = ? AND day BETWEEN ? AND ?").bind(playerId, from, to),
+    // One extra day of sleep: the night after `to` decides that day's kitchen-closed goal.
+    db.prepare("SELECT day, minutes, wake_at, bed_at FROM sleep_entries WHERE player_id = ? AND day BETWEEN ? AND ?").bind(playerId, from, addDays(to, 1)),
     db.prepare("SELECT day, ROUND(SUM(oz), 1) AS oz FROM water_entries WHERE player_id = ? AND day BETWEEN ? AND ? GROUP BY day").bind(playerId, from, to),
+    db.prepare("SELECT day, eaten_at, created_at FROM meals WHERE player_id = ? AND day BETWEEN ? AND ?").bind(playerId, from, to),
   ]);
   const out = new Map<string, DayStats>();
   const get = (day: string) => {
@@ -314,8 +320,22 @@ export async function statsForRange(
   for (const r of food.results) {
     Object.assign(get(r.day), { calories: r.calories, protein: r.protein, fat: r.fat, carbs: r.carbs, sugar: r.sugar, addedSugar: r.added_sugar, fiber: r.fiber, sodium: r.sodium, iron: r.iron, unitemized: r.unitemized, foodCount: r.n });
   }
-  for (const r of sleep.results) Object.assign(get(r.day), { sleepMinutes: r.minutes, wakeAt: r.wake_at, bedAt: r.bed_at });
+  const beds = new Map<string, string>();
+  for (const r of sleep.results) {
+    beds.set(r.day, r.bed_at);
+    if (r.day <= to) Object.assign(get(r.day), { sleepMinutes: r.minutes, wakeAt: r.wake_at, bedAt: r.bed_at });
+  }
   for (const r of water.results) get(r.day).water = r.oz;
+  // Last meal before that night's bed (or the latest meal, while tonight's bedtime isn't logged yet).
+  for (const m of meals.results as { day: string; eaten_at: string | null; created_at: string }[]) {
+    const at = mealTime(m, tz);
+    if (!at) continue;
+    const s = get(m.day);
+    const bed = beds.get(addDays(m.day, 1)) ?? null;
+    s.nextBedAt = bed;
+    if (bed && Date.parse(at) > Date.parse(bed)) continue;
+    if (!s.lastAteAt || Date.parse(at) > Date.parse(s.lastAteAt)) s.lastAteAt = at;
+  }
   return out;
 }
 

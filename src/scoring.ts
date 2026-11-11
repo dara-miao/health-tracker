@@ -1,11 +1,12 @@
 // Pure scoring rules, kept separate so they're easy to read and test.
 //
-// Four daily goals:
+// Five daily goals:
 //   calories: cut  -> at or under calorie_target (but not under the cut floor)
 //                bulk -> at or over calorie_target
 //   protein:  at or over protein_target
 //   sleep:    slept at least the sleep target that night
 //   wake-up:  woke up by the day's wake time (weekday or weekend) plus the grace period
+//   kitchen closed: the day's last meal was at least the eating gap (3h) before that night's bedtime
 // Food goals need at least one logged entry that day, so not logging isn't a free "cut" win,
 // and none of the day's entries can be a bare total ("I hit 3000 today") with no foods behind it.
 // Fat and carbs are tracked and shown but aren't goals.
@@ -30,7 +31,10 @@ export interface Rules {
   calorieGrace?: number; // calories past the target that still count (estimates aren't that precise)
   proteinGrace?: number; // grams short of the protein target that still count
   breakDays?: Set<string>; // school breaks and holidays: weekday dates that use the weekend wake time
+  eatGapMinutes?: number; // how long before bed the last meal has to be (default 3 hours)
 }
+
+export const DEFAULT_EAT_GAP_MINUTES = 180;
 
 export interface DayStats {
   calories: number;
@@ -48,6 +52,8 @@ export interface DayStats {
   sleepMinutes: number | null;
   wakeAt: string | null; // ISO time they got up (the night's sleep ends on this day)
   bedAt?: string | null;
+  lastAteAt?: string | null; // ISO, the day's last meal before that night's bedtime
+  nextBedAt?: string | null; // ISO, bedtime the night after this day (the sleep that counts toward tomorrow)
 }
 
 export const EMPTY_DAY: DayStats = { calories: 0, protein: 0, fat: 0, carbs: 0, foodCount: 0, sleepMinutes: null, wakeAt: null };
@@ -57,6 +63,7 @@ export interface DayScore {
   proteinOk: boolean;
   sleepOk: boolean;
   wakeOk: boolean;
+  eatOk: boolean;
   points: number;
 }
 
@@ -102,12 +109,24 @@ export function wakeGoalMet(day: string, stats: DayStats, rules: Rules): boolean
   return wakeMinutes(stats.wakeAt, rules.tz) <= wakeTarget(day, rules) + rules.wakeGraceMinutes;
 }
 
+/** Minutes from the day's last meal to that night's bedtime, or null if either is missing. */
+export function eatGap(stats: DayStats): number | null {
+  if (!stats.lastAteAt || !stats.nextBedAt) return null;
+  return Math.round((Date.parse(stats.nextBedAt) - Date.parse(stats.lastAteAt)) / 60000);
+}
+
+export function eatGoalMet(stats: DayStats, rules: Rules): boolean {
+  const gap = eatGap(stats);
+  return gap != null && gap >= (rules.eatGapMinutes ?? DEFAULT_EAT_GAP_MINUTES);
+}
+
 export function scoreDay(goal: Goal, stats: DayStats, rules: Rules, day: string): DayScore {
   const calOk = calorieGoalMet(goal, stats, rules);
   const proteinOk = proteinGoalMet(goal, stats, rules);
   const sleepOk = sleepGoalMet(stats, rules);
   const wakeOk = wakeGoalMet(day, stats, rules);
-  return { calOk, proteinOk, sleepOk, wakeOk, points: +calOk + +proteinOk + +sleepOk + +wakeOk };
+  const eatOk = eatGoalMet(stats, rules);
+  return { calOk, proteinOk, sleepOk, wakeOk, eatOk, points: +calOk + +proteinOk + +sleepOk + +wakeOk + +eatOk };
 }
 
 // ---------- goal status (what the pages show instead of points) ----------
@@ -120,11 +139,12 @@ export interface DayStatus {
   protein: GoalStatus;
   sleep: GoalStatus;
   wake: GoalStatus;
+  eat: GoalStatus;
 }
 
-export const GOAL_KEYS = ["cal", "protein", "sleep", "wake"] as const;
+export const GOAL_KEYS = ["cal", "protein", "sleep", "wake", "eat"] as const;
 
-/** How close counts as "close": 10% on food, 30 minutes on sleep and wake-up. */
+/** How close counts as "close": 10% on food, 30 minutes on sleep, wake-up, and the eating gap. */
 export const NEAR = { food: 0.1, minutes: 30 };
 
 export function dayStatus(goal: Goal, s: DayStats, rules: Rules, day: string, today: string): DayStatus {
@@ -154,5 +174,12 @@ export function dayStatus(goal: Goal, s: DayStats, rules: Rules, day: string, to
     const late = wakeMinutes(s.wakeAt, rules.tz) - wakeTarget(day, rules) - rules.wakeGraceMinutes;
     wake = sc.wakeOk ? "hit" : late <= NEAR.minutes ? "near" : "miss";
   }
-  return { cal, protein, sleep, wake };
+  // Decided once that night's bedtime is logged; until then, a day with food is still in progress.
+  const gap = eatGap(s);
+  const need = rules.eatGapMinutes ?? DEFAULT_EAT_GAP_MINUTES;
+  const eat: GoalStatus =
+    gap != null ? (gap >= need ? "hit" : gap >= need - NEAR.minutes ? "near" : "miss")
+    : s.foodCount > 0 && live && !s.nextBedAt ? "now"
+    : "none";
+  return { cal, protein, sleep, wake, eat };
 }
