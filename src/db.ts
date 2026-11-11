@@ -107,6 +107,7 @@ export interface Meal {
   player_id: number;
   day: string;
   name: string | null;
+  eaten_at: string | null; // ISO, when they ate it; null = use created_at
   created_at: string;
 }
 
@@ -183,16 +184,32 @@ export async function setPendingBed(db: D1Database, id: number, iso: string | nu
 
 // ---------- meals & food ----------
 
-export async function createMeal(db: D1Database, playerId: number, day: string, name: string | null) {
+export async function createMeal(db: D1Database, playerId: number, day: string, name: string | null, eatenAt: string | null = null) {
   const row = await db
-    .prepare("INSERT INTO meals (player_id, day, name) VALUES (?, ?, ?) RETURNING id")
-    .bind(playerId, day, name)
+    .prepare("INSERT INTO meals (player_id, day, name, eaten_at) VALUES (?, ?, ?, ?) RETURNING id")
+    .bind(playerId, day, name, eatenAt)
     .first<{ id: number }>();
   return row!.id;
 }
 
 export async function getMeal(db: D1Database, playerId: number, mealId: number): Promise<Meal | null> {
   return db.prepare("SELECT * FROM meals WHERE id = ? AND player_id = ?").bind(mealId, playerId).first<Meal>();
+}
+
+export async function setMealTime(db: D1Database, playerId: number, mealId: number, eatenAt: string) {
+  await db.prepare("UPDATE meals SET eaten_at = ? WHERE id = ? AND player_id = ?").bind(eatenAt, mealId, playerId).run();
+}
+
+/** Meal times and nights of sleep over a range of wake-up days, for comparing late eating with sleep. */
+export async function mealsAndSleep(db: D1Database, playerId: number, from: string, to: string) {
+  const [meals, sleeps] = await db.batch<any>([
+    db.prepare("SELECT day, eaten_at, created_at FROM meals WHERE player_id = ? AND day BETWEEN ? AND ?").bind(playerId, addDays(from, -1), to),
+    db.prepare("SELECT day, bed_at, minutes FROM sleep_entries WHERE player_id = ? AND day BETWEEN ? AND ? ORDER BY day").bind(playerId, from, to),
+  ]);
+  return {
+    meals: meals.results as { day: string; eaten_at: string | null; created_at: string }[],
+    sleeps: sleeps.results as { day: string; bed_at: string; minutes: number }[],
+  };
 }
 
 /** Sugar is optional; added sugar can't be more than the total. */

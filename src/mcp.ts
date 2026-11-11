@@ -5,7 +5,7 @@ import * as db from "./db";
 import type { Env, FoodItem, Player } from "./db";
 import { UserError, dayStats, goToBed, goalLine, gymLine, gymSummary, logNight, ironWaterLine, mealTotals, sodiumLine, statusReport, sugarLine, totalsLine, wakeUp } from "./game";
 import { WORKOUT_KINDS, type WorkoutKind } from "./gym";
-import { addDays, formatOffset, gameDay, parseTime, prettyDay, utcOffsetMinutes } from "./time";
+import { addDays, formatOffset, gameDay, parseTime, prettyDay, prettyTime, utcOffsetMinutes } from "./time";
 
 const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
@@ -13,7 +13,7 @@ const INSTRUCTIONS = `This is a personal health tracker (food, sleep, wake-up) w
 
 Each day has four goals: calories (cut: stay at or under; bulk: reach at least), protein, sleeping at least the sleep target, and getting up by the wake-up time (get_status shows it). There are no points; the app shows which goals were hit. Fat, carbs and workouts are tracked and shown but aren't goals.
 
-- When they mention food they ate (or send a photo), estimate it and call log_food right away. Don't ask permission first.
+- When they mention food they ate (or send a photo), estimate it and call log_food right away. Don't ask permission first. If they ate it a while ago, pass eaten_at so the app can compare late eating with sleep.
 - Clarifying questions: if something they didn't specify would swing the estimate a lot (roughly 150+ calories or 15g+ protein: a portion of granola, nut butter, rice or pasta, a sauce or dressing, how it was cooked, which restaurant or brand), log your best guess first, then ask ONE short question with your assumption in it, e.g. "Logged the bowl assuming ⅓ cup granola. Was it more like ½ cup?" When they answer, fix that item with edit_food. Don't ask about small things (a handful of berries, a splash of milk), and don't ask more than one question per meal. If they don't answer, keep the guess.
 - Sleep: any way of saying they're going to sleep ("gn", "going to bed", "night", "heading to sleep") means sleep_start. Any way of saying they woke up ("gm", "just woke up", "I'm up", "morning") means sleep_end. The wake-up time is a goal, so log it right away; if they say they got up earlier ("up since 8"), pass that time. A plain greeting like "hi" or "hey" is not a wake-up. But if get_status shows they're still in bed and it's morning, ask "Did you just wake up?" before logging, and use the time they confirm.
 - Log foods, not totals. If they only give a number ("I hit 3000 today"), ask what they ate. A calorie number with no foods is saved but doesn't count toward the calorie or protein goal.
@@ -60,8 +60,21 @@ Meals: leave meal_id null to start a new meal. Pass an existing meal_id (from ge
         meal_id: { type: ["integer", "null"], description: "Add to this existing meal instead of starting a new one." },
         meal_name: { type: ["string", "null"], enum: ["Breakfast", "Lunch", "Dinner", "Snack", null], description: "Which meal: Breakfast, Lunch, Dinner, or Snack, by when they ate it. Never a dish name; the items say what it was." },
         day: { type: ["string", "null"], description: "YYYY-MM-DD to backdate (e.g. 'yesterday I forgot...'). Null for today." },
+        eaten_at: { type: ["string", "null"], description: "ISO 8601 time they ate it, when it wasn't just now ('had dinner at 7', 'a snack around 11pm last night'). Null if they're eating it now. Used to compare late eating with sleep." },
       },
       required: ["items"],
+    },
+  },
+  {
+    name: "set_meal_time",
+    description: "Change when a logged meal was eaten ('that dinner was actually at 9:30'). Get the meal id from get_status.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        meal_id: { type: "integer" },
+        eaten_at: { type: "string", description: "ISO 8601" },
+      },
+      required: ["meal_id", "eaten_at"],
     },
   },
   {
@@ -315,13 +328,18 @@ async function callTool(env: Env, player: Player, name: string, args: Args, now:
         mealId = meal.id;
         day = meal.day;
       } else {
-        day = args.day ?? today;
+        // A time they ate it picks the day too (a 1am snack belongs to the night before), unless a day was given.
+        let eaten = args.eaten_at == null || args.eaten_at === "" ? null : time(env, args.eaten_at, now);
+        if (eaten && eaten > now) eaten = now;
+        day = args.day ?? (eaten ? gameDay(eaten, env.GAME_TZ) : today);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day < addDays(today, -7)) {
           throw new ToolError("day must be YYYY-MM-DD, today or within the past week.");
         }
         // Agents often send the UTC date, which runs ahead of the game day at night. Never refuse a meal for that.
         if (day > today) day = today;
-        mealId = await db.createMeal(env.DB, player.id, day, args.meal_name ?? null);
+        // A time that doesn't fall on the meal's day is a mix-up; keep the meal and drop the time.
+        if (eaten && gameDay(eaten, env.GAME_TZ) !== day) eaten = null;
+        mealId = await db.createMeal(env.DB, player.id, day, args.meal_name ?? null, eaten?.toISOString() ?? null);
       }
       const added = await db.addFood(env.DB, player.id, mealId, day, food);
       const t = mealTotals({ items: added } as any);
@@ -334,6 +352,18 @@ async function callTool(env: Env, player: Player, name: string, args: Args, now:
         missingSodium(player, added),
         unitemizedNote(player, added),
       ].filter(Boolean).join("\n");
+    }
+
+    case "set_meal_time": {
+      const meal = await db.getMeal(env.DB, player.id, Number(args.meal_id));
+      if (!meal) throw new ToolError(`No meal ${args.meal_id} for ${player.name}. Call get_status for ids.`);
+      let eaten = time(env, args.eaten_at, now);
+      if (eaten > now) eaten = now;
+      if (gameDay(eaten, env.GAME_TZ) !== meal.day) {
+        throw new ToolError(`Meal ${meal.id} is on ${meal.day} (days roll over at 4am); that time falls on ${gameDay(eaten, env.GAME_TZ)}. Send a time on the meal's day, or delete it and log it again on the right day.`);
+      }
+      await db.setMealTime(env.DB, player.id, meal.id, eaten.toISOString());
+      return `Meal ${meal.id} was eaten at ${prettyTime(eaten.toISOString(), env.GAME_TZ)} on ${prettyDay(meal.day)}.`;
     }
 
     case "edit_food": {
@@ -504,7 +534,8 @@ async function agentNotes(env: Env, player: Player, tool: string, origin: string
   if (once) return "";
   const page = `${origin}/me/${await db.privateToken(env.DB, player.id)}`;
   const notes = [
-    `Workouts and water are logged only through you (there are no buttons on the page). If you don't have log_workout or log_water tools, tell ${player.name} once to remove and re-add the Health Tracker integration in Poke so the new tools show up.`,
+    `Workouts and water are logged only through you (there are no buttons on the page). If you don't have log_workout or log_water tools, or log_food has no eaten_at field, tell ${player.name} once to remove and re-add the Health Tracker integration in Poke so the new tools show up.`,
+    `Meal times: the app compares how close to bed ${player.name} last ate with how long they slept. If they ate something a while before telling you, pass eaten_at to log_food; fix a wrong time with set_meal_time.`,
     `Iron: if your log_food items have no iron_mg field, add it to the item's description as a tag, e.g. "1 cup lentils [iron 6.6mg]". The app reads the tag and removes it from the name.`,
   ];
   notes.push(`Fiber: if your log_food items have no fiber_g field, add it to the item's description as a tag, e.g. "1 cup oatmeal [fiber 4g]". The app reads the tag and removes it from the name.`);

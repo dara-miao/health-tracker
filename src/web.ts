@@ -2,10 +2,11 @@
 // small inline script from JSON embedded in the page.
 import * as db from "./db";
 import type { Env, Player } from "./db";
-import { GOAL_NAMES, SODIUM_RISK_MG, daySentence, recentPatterns, dayStats, goalStreaks, gymSentence, gymSummary, lastWeekAverages, mealTotals, todaySentence, trackingStart, weekGoals, weekNotes, type Averages, type GymSummary, type WeekGoals } from "./game";
+import { GOAL_NAMES, SODIUM_RISK_MG, daySentence, eatingAndSleep, recentPatterns, dayStats, goalStreaks, gymSentence, gymSummary, lastWeekAverages, mealTotals, todaySentence, trackingStart, weekGoals, weekNotes, type Averages, type EatingAndSleep, type GymSummary, type WeekGoals } from "./game";
 import { EMPTY_DAY, GOAL_KEYS, calorieGoalMet, dayStatus, proteinGoalMet, scoreDay, wakeGoalMet, wakeMinutes, wakeTarget, type DayStats, type GoalStatus } from "./scoring";
 import type { Workout } from "./gym";
 import type { Patterns } from "./patterns";
+import { clock, gapWords, mealTime } from "./digest";
 import { addDays, gameDay, localParts, prettyClock, prettyDay, prettyDuration, prettyTime, weekDays, weekdayOf, weekStart } from "./time";
 
 const FULL_DATE = (day: string) => {
@@ -603,20 +604,22 @@ function nav(current: "today" | "yesterday" | "history" | ""): string {
 
 const SLOTS = ["Breakfast", "Lunch", "Dinner", "Snack"] as const;
 
-/** Breakfast, Lunch, Dinner, or Snack: the agent's label when it's one of those, otherwise from when it was logged. */
+/** Breakfast, Lunch, Dinner, or Snack: the agent's label when it's one of those, otherwise from when it was eaten (ISO) or logged (SQLite time). */
 export function mealSlot(name: string | null, createdAt: string, tz: string): string {
   const named = SLOTS.find((x) => name && new RegExp(`\\b${x}\\b`, "i").test(name)) ?? (name && /\bbrunch\b/i.test(name) ? "Brunch" : undefined);
   if (named) return named;
-  const h = localParts(new Date(`${createdAt.replace(" ", "T")}Z`), tz).hour;
+  const iso = /([zZ]|[+-]\d{2}:?\d{2})$/.test(createdAt) ? createdAt : `${createdAt.replace(" ", "T")}Z`;
+  const h = localParts(new Date(iso), tz).hour;
   return h >= 4 && h < 11 ? "Breakfast" : h >= 11 && h < 15 ? "Lunch" : h >= 17 && h < 22 ? "Dinner" : "Snack";
 }
 
 function mealBlock(m: db.MealWithItems, sugar: boolean, tz: string, sodium = false): string {
   const t = mealTotals(m);
-  const when = prettyTime(`${m.created_at.replace(" ", "T")}Z`, tz).toLowerCase().replace(" ", "");
+  const at = mealTime(m, tz);
+  const when = at ? prettyTime(at, tz).toLowerCase().replace(" ", "") : "time not logged";
   const item = (it: db.FoodEntry) =>
     `<li>${esc(it.description)} <span class="muted">(${it.calories} cal, ${it.protein_g}g P, ${it.fat_g}g F, ${it.carbs_g}g C${it.fiber_g != null ? `, ${it.fiber_g}g fiber` : ""}${sugar && it.sugar_g != null ? `, ${it.sugar_g}g sugar${it.added_sugar_g ? ` (${it.added_sugar_g}g added)` : ""}` : ""}${it.iron_mg != null ? `, ${it.iron_mg}mg iron` : ""}${sodium && it.sodium_mg != null ? `, ${fmt(it.sodium_mg)}mg sodium` : ""})</span></li>`;
-  return `<div class="meal"><div class="meal-head"><div>${mealSlot(m.name, m.created_at, tz)} <span class="muted small">· ${when}</span></div><div class="tot">${fmt(t.calories)} cal · ${t.protein} g protein</div></div>
+  return `<div class="meal"><div class="meal-head"><div>${mealSlot(m.name, at ?? m.created_at, tz)} <span class="muted small">· ${when}</span></div><div class="tot">${fmt(t.calories)} cal · ${t.protein} g protein</div></div>
     <ul>${m.items.map(item).join("")}</ul></div>`;
 }
 
@@ -813,6 +816,14 @@ function patternsCard(pat: Patterns): string {
   return `<section class="card" id="patterns"><div class="row"><h3>Patterns</h3><span class="muted small">last 7 days</span></div>${notes}${swaps}</section>`;
 }
 
+/** How close to bed they've been eating, and whether it shows in their sleep. */
+function eatingCard(e: EatingAndSleep, tz: string): string {
+  const last = e.lastNight
+    ? `<p class="wline"><span class="k">Last night</span> <b>${clock(e.lastNight.lastAteAt, tz)}</b> <span class="muted">last bite · bed ${gapWords(e.lastNight.gapMinutes)} later</span></p>`
+    : "";
+  return `<section class="card" id="eating"><div class="row"><h3>Eating before bed</h3><span class="muted small">last 4 weeks</span></div><p class="prose pat">${esc(e.insight.text)}</p>${last}</section>`;
+}
+
 /** A row per goal, a square per day, and how many days it was hit. */
 function weekGrid(w: WeekGoals, today: string): string {
   const heads = w.days.map((d) => `<span class="dh${d === today ? " now" : ""}" title="${prettyDay(d)}">${prettyDay(d).slice(0, 1)}</span>`).join("");
@@ -849,7 +860,7 @@ function averagesCard(a: Averages, p: Player, weights: { day: string; lb: number
 export async function homePage(env: Env, player: Player, meToken: string, now: Date): Promise<Response> {
   const today = gameDay(now, env.GAME_TZ);
   const start = weekStart(today);
-  const [s, week, streaks, avgs, gym, todayMeals, weights, pats] = await Promise.all([
+  const [s, week, streaks, avgs, gym, todayMeals, weights, pats, eating] = await Promise.all([
     dayStats(env, player.id, today),
     weekGoals(env, player, start, today),
     goalStreaks(env, player, today),
@@ -858,6 +869,7 @@ export async function homePage(env: Env, player: Player, meToken: string, now: D
     db.mealsForDay(env.DB, player.id, today),
     db.weightsForPlayer(env.DB, player.id),
     recentPatterns(env, player, today),
+    eatingAndSleep(env, player, today),
   ]);
   const r = db.rules(env);
   const notes = weekNotes(week, streaks, today);
@@ -872,6 +884,7 @@ export async function homePage(env: Env, player: Player, meToken: string, now: D
     ${macros(env, player, s, { final: false })}
     ${patternsCard(pats)}
     ${sleepTiles(env, s, today)}
+    ${eatingCard(eating, env.GAME_TZ)}
     <section class="card tips"><div class="row"><h3>This week</h3><span class="muted small">${prettyDay(start).slice(4)} to ${prettyDay(addDays(start, 6)).slice(4)}</span></div>
       ${weekGrid(week, today)}${STATUS_KEY}<p class="tip-out" aria-live="polite"></p>
       ${notes ? `<p class="prose note">${esc(notes)}</p>` : ""}</section>

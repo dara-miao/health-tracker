@@ -1,5 +1,6 @@
 import * as db from "./db";
 import { patterns, type Patterns } from "./patterns";
+import { clock, digestInsight, gapWords, mealTime, nights, type DigestInsight, type Night } from "./digest";
 import type { Env, MealWithItems, Player } from "./db";
 import { EMPTY_DAY, GOAL_KEYS, calorieGoalMet, dayStatus, proteinGoalMet, scoreDay, sleepGoalMet, wakeMinutes, wakeTarget, type DayStats, type DayStatus } from "./scoring";
 import { countByDay, weekCount, weekStreak, type Workout } from "./gym";
@@ -319,6 +320,12 @@ export function gymSentence(p: Player, g: GymSummary, weekStartDay: string): str
   return `${what[0].toUpperCase()}${what.slice(1)}.${goal}`;
 }
 
+/** " eaten 9:40 PM", or "" for a backdated meal with no time. */
+function eatenWords(m: MealWithItems, tz: string): string {
+  const at = mealTime(m, tz);
+  return at ? ` eaten ${prettyTime(at, tz)}` : "";
+}
+
 /** Everything the agent needs to answer questions and pick the right ids. */
 export async function statusReport(env: Env, player: Player, now: Date, offset: string, pageUrl: string): Promise<string> {
   const tz = env.GAME_TZ;
@@ -341,7 +348,7 @@ export async function statusReport(env: Env, player: Player, now: Date, offset: 
     list.length === 0
       ? ["  (none)"]
       : list.flatMap((m) => [
-          `  Meal ${m.id}${m.name ? ` "${m.name}"` : ""}`,
+          `  Meal ${m.id}${m.name ? ` "${m.name}"` : ""}${eatenWords(m, tz)}`,
           ...m.items.map((i) => `    item ${i.id}: ${i.description}: ${i.calories} cal, ${i.protein_g}g P, ${i.fat_g}g F, ${i.carbs_g}g C`),
         ]);
 
@@ -352,6 +359,7 @@ export async function statusReport(env: Env, player: Player, now: Date, offset: 
     ...statusLines(env, player, stats, today).map((l) => `  ${l}`),
     `  ${gymLine(player, gym)}. Gym is tracked for consistency only, not scored.`,
     ...patternLines(await recentPatterns(env, player, today)),
+    eatingLine(await eatingAndSleep(env, player, today), tz),
     player.pending_bed_at ? `In bed since ${prettyTime(player.pending_bed_at, tz)}; hasn't logged waking up.` : "",
     lastWeight
       ? `Latest weight: ${lastWeight.lb} lb on ${lastWeight.day}${player.goal_weight_lb ? `, goal ${player.goal_weight_lb} lb` : ""}.`
@@ -406,6 +414,25 @@ export async function recentPatterns(env: Env, p: Player, today: string): Promis
     db.foodsForRange(env.DB, p.id, addDays(today, -14), today),
   ]);
   return patterns(p, [...stats.values()], foods);
+}
+
+export interface EatingAndSleep {
+  insight: DigestInsight; // over the last four weeks
+  lastNight: Night | null; // last night, if it had a meal and a bedtime
+}
+
+/** How close to bed they've been eating, and whether it shows in their sleep. Four weeks, to have enough nights. */
+export async function eatingAndSleep(env: Env, p: Player, today: string): Promise<EatingAndSleep> {
+  const { meals, sleeps } = await db.mealsAndSleep(env.DB, p.id, addDays(today, -28), today);
+  const ns = nights(meals, sleeps, env.GAME_TZ);
+  const last = ns.at(-1);
+  return { insight: digestInsight(ns), lastNight: last?.day === today ? last : null };
+}
+
+/** For Poke's get_status. */
+export function eatingLine(e: EatingAndSleep, tz: string): string {
+  const last = e.lastNight ? `Last night: ate last at ${clock(e.lastNight.lastAteAt, tz)}, bed ${gapWords(e.lastNight.gapMinutes)} later. ` : "";
+  return `Eating before bed (last 4 weeks): ${last}${e.insight.text}`;
 }
 
 /** Patterns for Poke's get_status. */

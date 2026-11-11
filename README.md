@@ -55,6 +55,7 @@ Four goals a day. There are no points: each goal is **hit**, **close** (within 1
 - Food estimates aren't exact, so calories get 50 cal of grace past the target and protein 5g short of it (`CALORIE_GRACE`, `PROTEIN_GRACE_G`).
 - Fat and carbs are tracked and shown but aren't goals.
 - **Sugar (opt-in):** the agent estimates total and added sugar for every item, so you can track added (refined) vs natural sugar against a daily limit.
+- **Eating before bed:** each meal keeps the time it was eaten (when it was logged, unless you say otherwise: "had dinner at 7"). The Today page pairs each night with your last meal before bed and compares sleep after eating within 2 hours of bed with sleep after stopping 3+ hours before, over the last 4 weeks, once there are 3 nights of each.
 - **Gym consistency is tracked on the side, not scored:** this week's workouts (gym, sport, or run), a GitHub-style grid of every week on the history page, darker on days with two or more, and a streak of weeks that hit your weekly goal.
 - Logging nothing doesn't count as a perfect cut day; it's blank.
 - A bare total ("I hit 3,000 today") with no foods is saved but doesn't count toward the calorie or protein goal; the agent asks what was actually eaten.
@@ -66,10 +67,11 @@ Four goals a day. There are no points: each goal is **hit**, **close** (within 1
 
 | Tool | What it does |
 |---|---|
-| `log_food` | Log items with calories, protein, fat, carbs, and sugar (total and added); add to an existing meal or backdate up to a week |
+| `log_food` | Log items with calories, protein, fat, carbs, and sugar (total and added); add to an existing meal, backdate up to a week, or say when it was eaten |
 | `edit_food` / `delete_food` | Fix or remove a single item ("actually it was 3 eggs") |
 | `sleep_start` / `sleep_end` | "gn" and "gm"; computes duration and the wake-up goal |
 | `log_sleep` | A whole night after the fact ("slept 1 to 8") |
+| `set_meal_time` | Fix when a meal was eaten ("that dinner was actually at 9:30") |
 | `get_status` | Current time, goals, today's and yesterday's meals with ids, workouts, the week's goals |
 | `set_sugar_goal` | Turn on sugar tracking with an added-sugar limit, change it, or turn it off |
 | `log_workout` / `remove_workout` / `set_workout_target` | Mark a gym, sport, or run day on the consistency grid, and set the weekly goal the streak counts |
@@ -102,6 +104,7 @@ src/
   game.ts      sleep logging, reports, status text, weekly totals
   scoring.ts   the scoring rules as pure functions
   gym.ts       weekly workout counts and streaks
+  digest.ts    last meal before bed vs. sleep that night
   time.ts      time zones, 4am rollover, ISO parsing
   web.ts       today, history charts, setup
   poke.ts      outgoing messages via Poke
